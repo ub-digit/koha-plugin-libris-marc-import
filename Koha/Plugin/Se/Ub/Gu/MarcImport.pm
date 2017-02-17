@@ -312,7 +312,6 @@ sub to_marc {
     return \@processed_marc_records;
 }
 
-
 sub GetKohaItemsFromMarcField {
     my ($item_field, $frameworkcode) = @_;
     my $temp_item_marc = MARC::Record->new();
@@ -403,35 +402,6 @@ sub marc_record_deleted {
     return substr($record->leader(), 5, 1) eq 'd';
 }
 
-#sub biblio_item_ids {
-#    my ($biblionumber) = @_;
-#    my $query = "SELECT itemnumber FROM items WHERE biblionumber = ?";
-#    my $dbh = C4::Context->dbh;
-#    my $sth = $dbh->prepare($query);
-#    my @item_ids;
-#    $sth->execute($biblionumber);
-#    while (my ($item_number) = $sth->fetchrow) {
-#        push @item_ids, $item_number;
-#    }
-#    # TODO: Is this bad practice? If expecting first item of array if called in list
-#    # context caller has a problem, so this might be confusing?
-#    return wantarray ? @item_ids : \@item_ids;
-#}
-
-# TODO: Apparently koha_delete_biblioitems has changed since last pull,
-# don't think this (unsafe) sub is needed any more?
-sub delete_biblio_items {
-    my ($biblionumber) = @_;
-    foreach my $item_number (GetItemnumbersForBiblio($biblionumber)) {
-        my $status = DelItemCheck($biblionumber, $item_number);
-        if ($status != 1) {
-            warn "ERROR: Delete biblio item $item_number failed: $status\n";
-            return 0;
-        }
-    }
-    return 1;
-}
-
 # Return fields in $fields_a and $fields_b with values present in both
 # both arrays, result sets are returned in the order of fields in $fields_a
 sub marc_record_fields_intersect {
@@ -472,23 +442,6 @@ sub marc_record_tag_spec_expand_tags {
         $tags{$tag_spec} = undef;
     }
     return keys %tags;
-}
-
-#TODO: is this in use? Nope
-sub in_place_dedup_record_fields_by_spec {
-    my ($record, $tag_spec, $subfield) = @_;
-    my %tags;
-    if ($tag_spec =~ /\./) {
-        foreach my $field ($record->field($tag_spec)) {
-            $tags{$field->tag()} = undef;
-        }
-    }
-    else {
-        $tags{$tag_spec} = undef;
-    }
-    foreach my $tag (keys %tags) {
-        in_place_dedup_record_field($record, $tag, $subfield);
-    }
 }
 
 sub in_place_dedup_record_field {
