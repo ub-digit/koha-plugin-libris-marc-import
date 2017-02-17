@@ -285,7 +285,6 @@ sub to_marc {
                         push @existing_koha_items, GetItem($itemnumber);
                     }
                 }
-                # my @existing_koha_items = $matched_record ? GetKohaItemsFromMarcRecord($matched_record, $frameworkcode) : ();
                 ITEMFIELD: foreach my $item_field (@koha_item_fields) {
                     my $incoming_item = GetKohaItemsFromMarcField($item_field, $frameworkcode);
                     # First check for possibly existing barcodes (globally)
@@ -306,23 +305,7 @@ sub to_marc {
                 if (@new_koha_item_fields) {
                     $record->insert_fields_ordered(@new_koha_item_fields);
                 }
-                #my @incoming_koha_items = GetKohaItemsFromMarcRecord($record, '');
-                # First check for possibly existing barcodes (globally)
-                #foreach my $item (@incoming_koha_items) {
-                #    my $existing_itemnumber = GetItemnumberFromBarcode($item->{'barcode'});
-                #}
             }
-            ## Process items
-            #
-            # 1. Extract incoming items from marc and also convert (copy?) to koha-items for comparison
-            # 2.
-
-            # 1. Load existing items if possible
-            # TODO: Should really be a koha helper function from this, right now
-            # lots of copy-paste from AddItemBatchFromMarc etc
-            my $record_items = 'basevs';
-
-            # TODO: How handle staged records for deletion etc? Right now we exclude them
             push @processed_marc_records, $record;
         }
     }
