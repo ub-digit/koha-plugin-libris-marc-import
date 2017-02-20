@@ -15,6 +15,7 @@ use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
 use MARC::Record;
 use List::MoreUtils qw(all any);
+use Unicode::Normalize qw(normalize check);
 
 ## Here we set our plugin version
 our $VERSION = 0.01;
@@ -64,6 +65,10 @@ sub to_marc {
     my @processed_marc_records;
 
     # @TODO: expose all config variables as configurable options in plugin settings
+    my $normalize_utf8 = 1;
+    my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
+    my $normalize_utf8_normalization_form = 'C';
+
     my $authorities = 0;
     my $server = ($authorities ? 'authorityserver' : 'biblioserver');
     my $searcher = Koha::SearchEngine::Search->new(
@@ -179,6 +184,22 @@ sub to_marc {
             }
         }
         else {
+            if ($normalize_utf8) {
+                if(any { $_ eq $normalize_utf8_normalization_form } @valid_utf8_normalization_forms) {
+                    # @FIXME: $format paramter?
+                    my $record_xml = $record->as_xml();
+                    # Only convert if we really have to, perhaps remove this overly zealous optimization
+                    # as it might also slow things down (if it is almost never the case that record already
+                    # has the desired normalization form)
+                    if(!check($normalize_utf8_normalization_form, $record_xml)) {
+                        my $record_normalized_xml = normalize($normalize_utf8_normalization_form, $record_xml);
+                        $record = MARC::Record->new_from_xml($record_normalized_xml, 'UTF-8');
+                    }
+                }
+                else {
+                    die("Invalid UTF-8 normalization form: $normalize_utf8_normalization_form");
+                }
+            }
             # Dedupe records, and match up fields
             # 1. Dedup incoming record field
             # 2. Dedup existing
