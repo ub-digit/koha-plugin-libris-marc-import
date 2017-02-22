@@ -13,6 +13,7 @@ use C4::Search;
 use C4::Charset qw(SetUTF8Flag);
 use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
+use Koha::BiblioFrameworks;
 use MARC::Record;
 use List::MoreUtils qw(all any);
 use Unicode::Normalize qw(normalize check);
@@ -26,7 +27,7 @@ our $metadata = {
     author => 'David Gustafsson',
     description => 'Custom marc import tweaks (@todo: proper desc)',
     date_authored   => '2017-02-07',
-    date_updated    => '2017-02-17',
+    date_updated    => '2017-02-21',
     minimum_version => '16.05',
     maximum_version => undef,
     version         => $VERSION,
@@ -69,6 +70,7 @@ sub to_marc {
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
     my $normalize_utf8_normalization_form = 'C';
 
+
     my $authorities = 0;
     my $server = ($authorities ? 'authorityserver' : 'biblioserver');
     my $searcher = Koha::SearchEngine::Search->new(
@@ -85,8 +87,11 @@ sub to_marc {
     # Canonical way of getting internal koha tagspec?
     my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $frameworkcode);
     my $move_incoming_control_number = 1;
-    my $dedup_field = ['035a'];
-    my $record_status_delete_force = 1; #Delete with items
+    my $deduplicate_fields_tagspecs = ['035a'];
+    my $incoming_record_items_tag = '949';
+
+    # @FIXME: This feels a litte bit shaky?
+    my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
 
     # Libris => Koha mapping
     # @TODO(!) this can not be hard coded, must be feted from koha items fields mappings
@@ -101,6 +106,7 @@ sub to_marc {
         #'K' => ??,
     );
     # Properties for which if all equal two items considered equal
+    # TODO: Could make this configurable?
     my @item_comparison_props = (
         #'location', # Redundant because of previous check
         'itype',
@@ -209,7 +215,7 @@ sub to_marc {
 
             ## Dedup incoming record field
             my $matched_record = $matched_record_id ? GetMarcBiblio($matched_record_id) : undef;
-            foreach my $field_spec (@{$dedup_field}) {
+            foreach my $field_spec (@{$deduplicate_fields_tagspecs}) {
                 my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-z]?)/;
                 if (!$tag_spec) {
                     die "Empty or invalid tag-spec: \"$tag_spec\"";
@@ -276,8 +282,7 @@ sub to_marc {
             }
 
             my @koha_item_fields = ();
-            #TODO: perhaps not hard-code field tags?
-            foreach my $libris_item_field ($record->field('949')) {
+            foreach my $libris_item_field ($record->field($incoming_record_items_tag)) {
                 my %subfield_values = ();
                 my $data;
                 foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
@@ -293,7 +298,8 @@ sub to_marc {
                 }
                 if (%subfield_values) {
                     $subfield_values{'z'} = '1';
-                    push @koha_item_fields, MARC::Field->new('952', '', '', %subfield_values);
+                    # @TODO: get items field from koha instead
+                    push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
                 }
             }
             # Only need to bother if there is any actual item incoming items
@@ -365,26 +371,82 @@ sub configure {
     my ( $self, $args ) = @_;
     my $cgi = $self->{'cgi'};
 
-    unless ( $cgi->param('save') ) {
+    ## Grab the values we already have for our settings, if any exist
+    my $framework_options = Koha::BiblioFrameworks->search({}, { order_by => ['frameworktext'] });
+    my $normalize_utf8_normalization_form_options = ['D', 'C', 'KD', 'KC'];
+
+    #TODO: make package global, our?
+    my $default_incoming_record_items_tag = '949';
+    my $default_normalize_utf8_normalization_form = 'C';
+
+    unless ($cgi->param('save')) {
         my $template = $self->get_template({ file => 'configure.tt' });
-
         ## Grab the values we already have for our settings, if any exist
+        #
+        my $wtf = {
+            framework => $self->retrieve_data('framework') // '',
+            process_incoming_items  => $self->retrieve_data('process_incoming_items') || '0',
+            incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
+            normalize_utf8 => $self->retrieve_data('normalize_utf8') || '0',
+            normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
+            normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
+            deduplicate_fields_tagspecs => $self->retrieve_data('deduplicate_fields_tagspecs') // '', # '035a'
+            move_incoming_control_number => $self->retrieve_data('move_incoming_control_number') || '0',
+            matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
+        };
         $template->param(
-            foo => $self->retrieve_data('foo'),
-            bar => $self->retrieve_data('bar'),
+            framework_options => $framework_options,
+            framework => $self->retrieve_data('framework') // '',
+            incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
+            normalize_utf8 => $self->retrieve_data('normalize_utf8') || '0',
+            normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
+            normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
+            deduplicate_fields_tagspecs => $self->retrieve_data('deduplicate_fields_tagspecs') // '', # '035a'
+            move_incoming_control_number => $self->retrieve_data('move_incoming_control_number') || '0',
+            matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
         );
-
         print $cgi->header();
         print $template->output();
     }
     else {
-        $self->store_data(
-            {
-                foo                => $cgi->param('foo'),
-                bar                => $cgi->param('bar'),
-                last_configured_by => C4::Context->userenv->{'number'},
+        sub validate_option {
+            my ($option, $valid_options, $label) = @_;
+            if (!(any { $_ eq $option } @{$valid_options})) {
+                die("Invalid option for \"$label\": \"$option\"");
             }
-        );
+        }
+        my $config = {
+            framework => $cgi->param('framework') // '',
+            process_incoming_items  => $cgi->param('process_incoming_items') || '0',
+            incoming_record_items_tag  => $cgi->param('incoming_record_items_tag') // '',
+            normalize_utf8 => $cgi->param('normalize_utf8') || '0',
+            normalize_utf8_normalization_form => $cgi->param('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
+            deduplicate_fields_tagspecs_enable => $cgi->param('deduplicate_fields_tagspecs_enable') || '0',
+            deduplicate_fields_tagspecs => $cgi->param('deduplicate_fields_tagspecs') // '',
+            move_incoming_control_number => $cgi->param('move_incoming_control_number') || '0',
+            record_matching_enable => $cgi->param('record_matching_enable') || '0',
+            matchpoints => $cgi->param('matchpoints') // '',
+            last_configured_by => C4::Context->userenv->{'number'},
+        };
+        #TODO: regexp validation for non-options settings
+        # Seems reset is not necessary?
+        $framework_options->reset;
+        my @valid_frameworkcodes = ();
+        push @valid_frameworkcodes, '';
+        while (my $row = $framework_options->next) {
+            push @valid_frameworkcodes, $row->get_column('frameworkcode');
+        }
+
+        # Validate
+        validate_option($config->{framework}, \@valid_frameworkcodes, 'Framework');
+        my $checkbox_options = ['0', '1'];
+        validate_option($config->{normalize_utf8}, $checkbox_options, 'Normalize UTF-8');
+        validate_option($config->{move_incoming_control_number}, $checkbox_options, 'Move incoming control number');
+        validate_option($config->{process_incoming_items}, $checkbox_options, 'Process incoming items');
+        validate_option($config->{deduplicate_fields_tagspecs_enable}, $checkbox_options, 'Enable deduplicate fields');
+
+        # Save
+        $self->store_data($config);
         $self->go_home();
     }
 }
@@ -467,23 +529,23 @@ sub marc_record_tag_spec_expand_tags {
 
 sub in_place_dedup_record_field {
     my($record, $tag, $subfield) = @_;
-    my %dedup_fields;
+    my %deduplicate_fields_tagspecs;
     my $key;
     my @fields = $record->field($tag);
     my $has_dups = 0;
     foreach my $field (@fields) {
         $key = $subfield ? $field->subfield($subfield) : $field->data();
-        if (exists $dedup_fields{$key}) {
+        if (exists $deduplicate_fields_tagspecs{$key}) {
             $has_dups = 1;
         }
         else {
-            $dedup_fields{$key} = $field;
+            $deduplicate_fields_tagspecs{$key} = $field;
         }
     }
     if ($has_dups) {
         #print "HAS DUPS!\n";
         $record->delete_fields(@fields);
-        $record->insert_fields_ordered(values %dedup_fields);
+        $record->insert_fields_ordered(values %deduplicate_fields_tagspecs);
     }
     else {
         #print "HAS NO DUPS!\n";

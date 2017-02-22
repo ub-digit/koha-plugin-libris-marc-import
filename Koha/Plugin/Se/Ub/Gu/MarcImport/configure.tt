@@ -9,41 +9,129 @@
 <div id="breadcrumbs"><a href="/cgi-bin/koha/mainpage.pl">Home</a> &rsaquo; <a href="/cgi-bin/koha/plugins/plugins-home.pl">Plugins</a> &rsaquo; GUB Marc Import &rsaquo; Configuration</div>
 
 <div id="doc3">
-    <!-- We can access our own plugins resource files using the PLUGIN_PATH variable. -->
-    <img src="[% PLUGIN_PATH %]/logo.png" />
-    <h3>Koha: GUB Marc Import Plugin: Configuration</h3>
-
-    <!-- Notice our form here has no 'action', this is good, it means that our forms will always get passed back to 'plugins/run.pl'. You could hard code it instead if you prefer -->
-    <form method="get">
-        <!-- Always pass these two parameters so the plugin system knows what to execute! -->
+    <!-- img src="[% PLUGIN_PATH %]/logo.png" -->
+    <h3>Koha: Libris Marc Import Plugin: Configuration</h3>
+    <form method="GET">
         <input type="hidden" name="class" value="[% CLASS %]"/>
         <input type="hidden" name="method" value="[% METHOD %]"/>
 
-        <label for="foo">Parameter 'foo': </label>
-        <select name="foo">
-            [% IF foo == 'A' %]
-                <option value="A" selected="selected">Option A</option>
+        <!-- TODO: Description/Help text for all fieds, translations -->
+        <fieldset class="rows">
+        <legend>General options</legend>
+        <ol>
+        <li>
+            <label for="framework">MARC framework:</label>
+            <select id="framework" name="framework">
+                [% IF framework == '' %]
+                    <option value="" selected="selected">Default</option>
+                [% ELSE %]
+                    <option value="">Default</option>
+                [% END %]
+                [% FOREACH framework_option IN framework_options %]
+                    [% IF framework == framework_option.frameworkcode %]
+                        <option value="[% framework_option.frameworkcode %]" selected="selected">[% framework_option.frameworktext %]</option>
+                    [% ELSE %]
+                        <option value="[% framework_option.frameworkcode %]">[% framework_option.frameworktext %]</option>
+                    [% END %]
+                [% END %]
+            </select>
+        </li>
+        </ol>
+        </fieldset>
+        <fieldset class="rows">
+        <legend>Incoming record UTF-8 normalization</legend>
+        <ol>
+        <li>
+            <label for="normalize_utf8">Enable:</label>
+            [% IF normalize_utf8 %]
+                <input id="normalize_utf8" type="checkbox" name="normalize_utf8" value="1" checked>
             [% ELSE %]
-                <option value="A">Option A</option>
+                <input id="normalize_utf8" type="checkbox" name="normalize_utf8" value="1">
             [% END %]
-
-            [% IF foo == 'B' %]
-                <option value="B" selected="selected">Option B</option>
+        </li>
+        <li>
+            <label for="normalize_utf8_normalization_form">UTF-i normalization form:</label>
+            <select id="normalize_utf8_normalization_form" name="normalize_utf8_normalization_form">
+                [% FOREACH normalize_utf8_normalization_form_option IN normalize_utf8_normalization_form_options %]
+                    [% IF normalize_utf8_normalization_form == normalize_utf8_normalization_form_option %]
+                        <option value="[% normalize_utf8_normalization_form_option  %]" selected="selected">[% normalize_utf8_normalization_form_option %]</option>
+                    [% ELSE %]
+                        <option value="[% normalize_utf8_normalization_form_option %]">[% normalize_utf8_normalization_form_option %]</option>
+                    [% END %]
+                [% END %]
+            </select>
+        </li>
+        </ol>
+        </fieldset>
+        <fieldset class="rows">
+        <legend>Incoming record items processing</legend>
+        <ol>
+        <li>
+            <label for="process_incoming_record_items">Enable:</label>
+            [% IF process_incoming_record_items %]
+                <input id="process_incoming_record_items" type="checkbox" name="process_incoming_record_items" value="1" checked>
             [% ELSE %]
-                <option value="B">Option B</option>
+                <input id="process_incoming_record_items" type="checkbox" name="process_incoming_record_items" value="1">
             [% END %]
-        </select>
-
-        <p>
-
-        <label for="bar">Parameter 'bar': </label>
-        <input type="text" name="bar" value="[% bar %]" />
-
-        <p>
-
+        </li>
+        <li>
+            <label for="incoming_record_items_tag">Incoming record items tag:</label>
+            <input id="incoming_record_items_tag" type="text" name="incoming_record_items_tag" value="[% incoming_record_items_tag %]" />
+        </li>
+        </ol>
+        </fieldset>
+        <fieldset class="rows">
+        <legend>Incoming record deduplicate fields</legend>
+        <ol>
+        <li>
+            <label for="deduplicate_fields_enable">Enable:</label>
+            [% IF deduplicate_fields_enable %]
+                <input id="deduplicate_fields_enable" type="checkbox" name="deduplicate_fields_enable" value="1" checked>
+            [% ELSE %]
+                <input id="deduplicate_fields_enable" type="checkbox" name="deduplicate_fields_enable" value="1">
+            [% END %]
+        </li>
+        <li>
+            <label for="deduplicate_fields_tagspecs">Tagspecs (separated by newline):</label>
+            <textarea id="deduplicate_fields_tagspecs" name="deduplicate_fields_tagspecs" cols="30" rows="3">[% deduplicate_fields_tagspecs %]</textarea>
+        </li>
+        </ol>
+        </fieldset>
+        <fieldset class="rows">
+        <legend>Record matching</legend>
+        <ol>
+        <li>
+            <label for="record_matching_enable">Enable:</label>
+            [% IF record_matching_enable %]
+                <input id="record_matching_enable" type="checkbox" name="record_matching_enable" value="1" checked>
+            [% ELSE %]
+                <input id="record_matching_enable" type="checkbox" name="record_matching_enable" value="1">
+            [% END %]
+        </li>
+        <li>
+            <label for="matchpoints">Matchpoints:</label>
+            <textarea id="matchpoints" name="matchpoints" cols="30" rows="3">[% matchpoints %]</textarea>
+        </li>
+        </ol>
+        </fieldset>
+        <fieldset class="rows">
+        <legend>Move incoming control number</legend>
+        <ol>
+        <li>
+            <label for="move_incoming_control_number">Enable:</label>
+            [% IF move_incoming_control_number %]
+                <input id="move_incoming_control_number" type="checkbox" name="move_incoming_control_number" value="1" checked>
+            [% ELSE %]
+                <input id="move_incoming_control_number" type="checkbox" name="move_incoming_control_number" value="1">
+            [% END %]
+        </li>
+        </ol>
+        </fieldset>
         <input type="hidden" name="save" value="1" />
-
-        <input type="submit" value="Save configuration" />
+        <fieldset class="action">
+            <input type="submit" value="Save configuration" />
+        </fieldset>
     </form>
+</div>
 
 [% INCLUDE 'intranet-bottom.inc' %]
