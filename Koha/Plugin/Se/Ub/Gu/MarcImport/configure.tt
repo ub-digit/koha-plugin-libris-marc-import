@@ -42,11 +42,11 @@
         <legend>Incoming record UTF-8 normalization</legend>
         <ol>
         <li>
-            <label for="normalize_utf8">Enable:</label>
-            [% IF normalize_utf8 %]
-                <input id="normalize_utf8" type="checkbox" name="normalize_utf8" value="1" checked>
+            <label for="normalize_ut8_enable">Enable:</label>
+            [% IF normalize_ut8_enable %]
+                <input id="normalize_ut8_enable" type="checkbox" name="normalize_ut8_enable" value="1" checked>
             [% ELSE %]
-                <input id="normalize_utf8" type="checkbox" name="normalize_utf8" value="1">
+                <input id="normalize_ut8_enable" type="checkbox" name="normalize_ut8_enable" value="1">
             [% END %]
         </li>
         <li>
@@ -67,11 +67,11 @@
         <legend>Incoming record items processing</legend>
         <ol>
         <li>
-            <label for="process_incoming_record_items">Enable:</label>
-            [% IF process_incoming_record_items %]
-                <input id="process_incoming_record_items" type="checkbox" name="process_incoming_record_items" value="1" checked>
+            <label for="process_incoming_record_items_enable">Enable:</label>
+            [% IF process_incoming_record_items_enable %]
+                <input id="process_incoming_record_items_enable" type="checkbox" name="process_incoming_record_items_enable" value="1" checked>
             [% ELSE %]
-                <input id="process_incoming_record_items" type="checkbox" name="process_incoming_record_items" value="1">
+                <input id="process_incoming_record_items_enable" type="checkbox" name="process_incoming_record_items_enable" value="1">
             [% END %]
         </li>
         <li>
@@ -118,11 +118,11 @@
         <legend>Move incoming control number</legend>
         <ol>
         <li>
-            <label for="move_incoming_control_number">Enable:</label>
-            [% IF move_incoming_control_number %]
-                <input id="move_incoming_control_number" type="checkbox" name="move_incoming_control_number" value="1" checked>
+            <label for="move_incoming_control_number_enable">Enable:</label>
+            [% IF move_incoming_control_number_enable %]
+                <input id="move_incoming_control_number_enable" type="checkbox" name="move_incoming_control_number_enable" value="1" checked>
             [% ELSE %]
-                <input id="move_incoming_control_number" type="checkbox" name="move_incoming_control_number" value="1">
+                <input id="move_incoming_control_number_enable" type="checkbox" name="move_incoming_control_number_enable" value="1">
             [% END %]
         </li>
         </ol>

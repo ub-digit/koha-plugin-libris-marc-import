@@ -62,15 +62,30 @@ sub new {
 # 5. Process items
 sub to_marc {
     my ( $self, $args ) = @_;
+
     my $marc_records = $args->{data};
     my @processed_marc_records;
 
-    # @TODO: expose all config variables as configurable options in plugin settings
-    my $normalize_utf8 = 1;
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
-    my $normalize_utf8_normalization_form = 'C';
 
+    # @FIXME: our?
+    my $default_incoming_record_items_tag = '949';
+    my $default_normalize_utf8_normalization_form = 'C';
 
+    my $config = {
+        framework => $self->retrieve_data('framework') // '',
+        process_incoming_items_enable  => $self->retrieve_data('process_incoming_items_enable') || '0',
+        incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
+        normalize_utf8_enable => $self->retrieve_data('normalize_utf8_enable') || '0',
+        normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
+        deduplicate_fields_tagspecs => [split(/[\r\n]+/, $self->retrieve_data('deduplicate_fields_tagspecs') // '')], # '035a' # @FIXME tagspec/fieldspec pick one
+        deduplicate_fields_tagspecs_enable => $self->retrieve_data('deduplicate_fields_tagspecs_enable') || '0',
+        move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
+        record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
+        matchpoints => [split(/[\r\n]+/, $self->retrieve_data('matchpoints') // '')], # 'system-control-number,035a'
+    };
+
+    #TODO: setting
     my $authorities = 0;
     my $server = ($authorities ? 'authorityserver' : 'biblioserver');
     my $searcher = Koha::SearchEngine::Search->new(
@@ -82,16 +97,12 @@ sub to_marc {
             )
         }
     );
-    my $frameworkcode = '';
 
     # Canonical way of getting internal koha tagspec?
-    my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $frameworkcode);
-    my $move_incoming_control_number = 1;
-    my $deduplicate_fields_tagspecs = ['035a'];
-    my $incoming_record_items_tag = '949';
+    my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $config->{framework});
 
     # @FIXME: This feels a litte bit shaky?
-    my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
+    my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $config->{framework});
 
     # Libris => Koha mapping
     # @TODO(!) this can not be hard coded, must be feted from koha items fields mappings
@@ -128,7 +139,7 @@ sub to_marc {
         }
         # @TODO: move this?
         ## Move incoming control number
-        if ($move_incoming_control_number) {
+        if ($config->{move_incoming_control_number_enable}) {
             my $control_number_identifier_field = $record->field('003');
             my $system_control_number = (
                 $control_number_identifier_field && $control_number_identifier_field->data ?
@@ -143,14 +154,14 @@ sub to_marc {
         }
         my $matched_record_id = $koha_local_record_id;
 
-        my $sequential_match = [
-            'system-control-number,035a',
-            #'local-number,999c',
-        ];
+        #my $sequential_match = [
+        #   'system-control-number,035a',
+        #   'local-number,999c',
+        #];
 
         ## Perform search engine based record matching
-        if (!$matched_record_id) {
-            SEQUENTIAL_MATCH: foreach my $matchpoint (@{$sequential_match}) {
+        if (!$matched_record_id && $config->{record_matching_enable}) {
+            SEQUENTIAL_MATCH: foreach my $matchpoint (@{$config->{matchpoints}}) {
                 my $query = build_simplequery($matchpoint, $record, 'OR');
                 if ($query) {
                     my ($error, $results, $totalhits) = $searcher->simple_search_compat($query, 0, 3, [$server]);
@@ -190,20 +201,20 @@ sub to_marc {
             }
         }
         else {
-            if ($normalize_utf8) {
-                if(any { $_ eq $normalize_utf8_normalization_form } @valid_utf8_normalization_forms) {
+            if ($config->{normalize_utf8_enable}) {
+                if(any { $_ eq $config->{normalize_utf8_normalization_form} } @valid_utf8_normalization_forms) {
                     # @FIXME: $format paramter?
                     my $record_xml = $record->as_xml();
                     # Only convert if we really have to, perhaps remove this overly zealous optimization
                     # as it might also slow things down (if it is almost never the case that record already
                     # has the desired normalization form)
-                    if(!check($normalize_utf8_normalization_form, $record_xml)) {
-                        my $record_normalized_xml = normalize($normalize_utf8_normalization_form, $record_xml);
+                    if(!check($config->{normalize_utf8_normalization_form}, $record_xml)) {
+                        my $record_normalized_xml = normalize($config->{normalize_utf8_normalization_form}, $record_xml);
                         $record = MARC::Record->new_from_xml($record_normalized_xml, 'UTF-8');
                     }
                 }
                 else {
-                    die("Invalid UTF-8 normalization form: $normalize_utf8_normalization_form");
+                    die("Invalid UTF-8 normalization form: $config->{normalize_utf8_normalization_form}");
                 }
             }
             # Dedupe records, and match up fields
@@ -215,122 +226,124 @@ sub to_marc {
 
             ## Dedup incoming record field
             my $matched_record = $matched_record_id ? GetMarcBiblio($matched_record_id) : undef;
-            foreach my $field_spec (@{$deduplicate_fields_tagspecs}) {
-                my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-z]?)/;
-                if (!$tag_spec) {
-                    die "Empty or invalid tag-spec: \"$tag_spec\"";
-                }
-                foreach my $tag (marc_record_tag_spec_expand_tags($record, $tag_spec)) {
-                    in_place_dedup_record_field($record, $tag, $subfield);
-                    if ($matched_record) {
-                        # The reason why we return fields of both records is that
-                        # they are still not guarantied to be unique.
-                        # For example, the specified subfield might match, but other
-                        # subfields might differ
-                        # This is a bit of a kludge, the alternative would be to delete the
-                        # current record's field for example (and replace with incoming)
-                        # Both returned sets are in the order of fields in first argument
+            if ($config->{deduplicate_fields_tagspecs_enable}) {
+                foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
+                    my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-z]?)/;
+                    if (!$tag_spec) {
+                        die "Empty or invalid tag-spec: \"$tag_spec\"";
+                    }
+                    foreach my $tag (marc_record_tag_spec_expand_tags($record, $tag_spec)) {
+                        in_place_dedup_record_field($record, $tag, $subfield);
+                        if ($matched_record) {
+                            # The reason why we return fields of both records is that
+                            # they are still not guarantied to be unique.
+                            # For example, the specified subfield might match, but other
+                            # subfields might differ
+                            # This is a bit of a kludge, the alternative would be to delete the
+                            # current record's field for example (and replace with incoming)
+                            # Both returned sets are in the order of fields in first argument
 
-                        my @record_field = $record->field($tag);
-                        my @matched_record_field = $matched_record->field($tag);
+                            my @record_field = $record->field($tag);
+                            my @matched_record_field = $matched_record->field($tag);
 
-                        my ($intersect_record_fields, $intersect_matched_record_fields) = marc_record_fields_intersect(
-                            \@record_field,
-                            \@matched_record_field,
-                            #\[$record->field($tag)],
-                            #\[$matched_record->field($tag)],
-                            $subfield
-                        );
+                            my ($intersect_record_fields, $intersect_matched_record_fields) = marc_record_fields_intersect(
+                                \@record_field,
+                                \@matched_record_field,
+                                #\[$record->field($tag)],
+                                #\[$matched_record->field($tag)],
+                                $subfield
+                            );
 
-                        if (@{$intersect_record_fields}) {
-                            # Delete existing record fields in intersection
-                            $matched_record->delete_fields(@{$intersect_matched_record_fields});
+                            if (@{$intersect_record_fields}) {
+                                # Delete existing record fields in intersection
+                                $matched_record->delete_fields(@{$intersect_matched_record_fields});
 
-                            # Re-add fields of existing record at the front, in order of intersected fields
-                            # of incoming record
-                            my $before_field = $matched_record->field($tag);
-                            if ($before_field) {
-                                $matched_record->insert_fields_before($before_field, @{$intersect_matched_record_fields});
-                            }
-                            else {
-                                $matched_record->insert_fields_ordered(@{$intersect_matched_record_fields});
-                            }
+                                # Re-add fields of existing record at the front, in order of intersected fields
+                                # of incoming record
+                                my $before_field = $matched_record->field($tag);
+                                if ($before_field) {
+                                    $matched_record->insert_fields_before($before_field, @{$intersect_matched_record_fields});
+                                }
+                                else {
+                                    $matched_record->insert_fields_ordered(@{$intersect_matched_record_fields});
+                                }
 
-                            # Do the same thing with incoming record
-                            $record->delete_fields(@{$intersect_record_fields});
-                            $before_field = $record->field($tag);
-                            if ($before_field) {
-                                $record->insert_fields_before($before_field, @{$intersect_record_fields});
-                            }
-                            else {
-                                $record->insert_fields_ordered(@{$intersect_record_fields});
+                                # Do the same thing with incoming record
+                                $record->delete_fields(@{$intersect_record_fields});
+                                $before_field = $record->field($tag);
+                                if ($before_field) {
+                                    $record->insert_fields_before($before_field, @{$intersect_record_fields});
+                                }
+                                else {
+                                    $record->insert_fields_ordered(@{$intersect_record_fields});
+                                }
                             }
                         }
                     }
                 }
-            }
-            ## Set koha local id if we got match
-            if ($matched_record_id) {
-                # Remove old koha field if present
-                my @local_id_fields = $record->field($koha_local_id_tag);
-                if (@local_id_fields) {
-                    $record->delete_fields(@local_id_fields);
-                }
-                # Set matched id as local id
-                my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $matched_record_id);
-                $record->insert_fields_ordered($local_id_field);
-            }
-
-            my @koha_item_fields = ();
-            foreach my $libris_item_field ($record->field($incoming_record_items_tag)) {
-                my %subfield_values = ();
-                my $data;
-                foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
-                    $data = $libris_item_field->subfield($libris_subfield);
-                    if ($data) {
-                        $subfield_values{ $libris_koha_subfield_mappings{ $libris_subfield } } = $data;
-                    }
-                }
-                # Special cases:
-                $data = $libris_item_field->subfield('D');
-                if ($data) {
-                    $subfield_values{'c'} = substr $data, 3; #c: items.location
-                }
-                if (%subfield_values) {
-                    $subfield_values{'z'} = '1';
-                    # @TODO: get items field from koha instead
-                    push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
-                }
-            }
-            # Only need to bother if there is any actual item incoming items
-            if (@koha_item_fields) {
-                my @new_koha_item_fields = ();
-                my @existing_koha_items = ();
+                ## Set koha local id if we got match
                 if ($matched_record_id) {
-                    my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
-                    foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
-                        push @existing_koha_items, GetItem($itemnumber);
+                    # Remove old koha field if present
+                    my @local_id_fields = $record->field($koha_local_id_tag);
+                    if (@local_id_fields) {
+                        $record->delete_fields(@local_id_fields);
+                    }
+                    # Set matched id as local id
+                    my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $matched_record_id);
+                    $record->insert_fields_ordered($local_id_field);
+                }
+
+                my @koha_item_fields = ();
+                foreach my $libris_item_field ($record->field($config->{incoming_record_items_tag})) {
+                    my %subfield_values = ();
+                    my $data;
+                    foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
+                        $data = $libris_item_field->subfield($libris_subfield);
+                        if ($data) {
+                            $subfield_values{ $libris_koha_subfield_mappings{ $libris_subfield } } = $data;
+                        }
+                    }
+                    # Special cases:
+                    $data = $libris_item_field->subfield('D');
+                    if ($data) {
+                        $subfield_values{'c'} = substr $data, 3; #c: items.location
+                    }
+                    if (%subfield_values) {
+                        $subfield_values{'z'} = '1';
+                        # @TODO: get items field from koha instead
+                        push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
                     }
                 }
-                ITEMFIELD: foreach my $item_field (@koha_item_fields) {
-                    my $incoming_item = GetKohaItemsFromMarcField($item_field, $frameworkcode);
-                    # First check for possibly existing barcodes (globally)
-                    if (GetItemnumberFromBarcode($incoming_item->{'barcode'})) {
-                        next ITEMFIELD;
+                # Only need to bother if there is any actual item incoming items
+                if (@koha_item_fields) {
+                    my @new_koha_item_fields = ();
+                    my @existing_koha_items = ();
+                    if ($matched_record_id) {
+                        my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
+                        foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
+                            push @existing_koha_items, GetItem($itemnumber);
+                        }
                     }
-                    foreach my $existing_item (@existing_koha_items) {
-                        # If has the same shelving location code the two items are concidered equal
-                        if (
-                            $incoming_item->{'location'} eq $existing_item->{'location'} ||
-                            all { $existing_item->{$_} eq $incoming_item->{$_} } @item_comparison_props
-                        ) {
+                    ITEMFIELD: foreach my $item_field (@koha_item_fields) {
+                        my $incoming_item = GetKohaItemsFromMarcField($item_field, $config->{framework});
+                        # First check for possibly existing barcodes (globally)
+                        if (GetItemnumberFromBarcode($incoming_item->{'barcode'})) {
                             next ITEMFIELD;
                         }
+                        foreach my $existing_item (@existing_koha_items) {
+                            # If has the same shelving location code the two items are concidered equal
+                            if (
+                                $incoming_item->{'location'} eq $existing_item->{'location'} ||
+                                all { $existing_item->{$_} eq $incoming_item->{$_} } @item_comparison_props
+                            ) {
+                                next ITEMFIELD;
+                            }
+                        }
+                        push @new_koha_item_fields, $item_field;
                     }
-                    push @new_koha_item_fields, $item_field;
-                }
-                if (@new_koha_item_fields) {
-                    $record->insert_fields_ordered(@new_koha_item_fields);
+                    if (@new_koha_item_fields) {
+                        $record->insert_fields_ordered(@new_koha_item_fields);
+                    }
                 }
             }
             push @processed_marc_records, $record;
@@ -382,27 +395,17 @@ sub configure {
     unless ($cgi->param('save')) {
         my $template = $self->get_template({ file => 'configure.tt' });
         ## Grab the values we already have for our settings, if any exist
-        #
-        my $wtf = {
-            framework => $self->retrieve_data('framework') // '',
-            process_incoming_items  => $self->retrieve_data('process_incoming_items') || '0',
-            incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
-            normalize_utf8 => $self->retrieve_data('normalize_utf8') || '0',
-            normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
-            normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
-            deduplicate_fields_tagspecs => $self->retrieve_data('deduplicate_fields_tagspecs') // '', # '035a'
-            move_incoming_control_number => $self->retrieve_data('move_incoming_control_number') || '0',
-            matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
-        };
         $template->param(
             framework_options => $framework_options,
             framework => $self->retrieve_data('framework') // '',
             incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
-            normalize_utf8 => $self->retrieve_data('normalize_utf8') || '0',
+            normalize_utf8_enable => $self->retrieve_data('normalize_utf8_enable') || '0',
             normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
             normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
             deduplicate_fields_tagspecs => $self->retrieve_data('deduplicate_fields_tagspecs') // '', # '035a'
-            move_incoming_control_number => $self->retrieve_data('move_incoming_control_number') || '0',
+            deduplicate_fields_tagspecs_enable => $self->retrieve_data('deduplicate_fields_tagspecs_enable') || '0',
+            move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
+            record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
             matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
         );
         print $cgi->header();
@@ -417,13 +420,13 @@ sub configure {
         }
         my $config = {
             framework => $cgi->param('framework') // '',
-            process_incoming_items  => $cgi->param('process_incoming_items') || '0',
+            process_incoming_items_enable  => $cgi->param('process_incoming_items_enable') || '0',
             incoming_record_items_tag  => $cgi->param('incoming_record_items_tag') // '',
-            normalize_utf8 => $cgi->param('normalize_utf8') || '0',
+            normalize_utf8_enable => $cgi->param('normalize_utf8_enable') || '0',
             normalize_utf8_normalization_form => $cgi->param('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
             deduplicate_fields_tagspecs_enable => $cgi->param('deduplicate_fields_tagspecs_enable') || '0',
             deduplicate_fields_tagspecs => $cgi->param('deduplicate_fields_tagspecs') // '',
-            move_incoming_control_number => $cgi->param('move_incoming_control_number') || '0',
+            move_incoming_control_number_enable => $cgi->param('move_incoming_control_number_enable') || '0',
             record_matching_enable => $cgi->param('record_matching_enable') || '0',
             matchpoints => $cgi->param('matchpoints') // '',
             last_configured_by => C4::Context->userenv->{'number'},
@@ -441,8 +444,8 @@ sub configure {
         validate_option($config->{framework}, \@valid_frameworkcodes, 'Framework');
         my $checkbox_options = ['0', '1'];
         validate_option($config->{normalize_utf8}, $checkbox_options, 'Normalize UTF-8');
-        validate_option($config->{move_incoming_control_number}, $checkbox_options, 'Move incoming control number');
-        validate_option($config->{process_incoming_items}, $checkbox_options, 'Process incoming items');
+        validate_option($config->{move_incoming_control_number_enable}, $checkbox_options, 'Move incoming control number');
+        validate_option($config->{process_incoming_items_enable}, $checkbox_options, 'Process incoming items');
         validate_option($config->{deduplicate_fields_tagspecs_enable}, $checkbox_options, 'Enable deduplicate fields');
 
         # Save
