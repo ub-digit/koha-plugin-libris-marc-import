@@ -42,11 +42,11 @@
         <legend>Incoming record UTF-8 normalization</legend>
         <ol>
         <li>
-            <label for="normalize_ut8_enable">Enable:</label>
-            [% IF normalize_ut8_enable %]
-                <input id="normalize_ut8_enable" type="checkbox" name="normalize_ut8_enable" value="1" checked>
+            <label for="normalize_utf8_enable">Enable:</label>
+            [% IF normalize_utf8_enable %]
+                <input id="normalize_utf8_enable" type="checkbox" name="normalize_utf8_enable" value="1" checked>
             [% ELSE %]
-                <input id="normalize_ut8_enable" type="checkbox" name="normalize_ut8_enable" value="1">
+                <input id="normalize_utf8_enable" type="checkbox" name="normalize_utf8_enable" value="1">
             [% END %]
         </li>
         <li>

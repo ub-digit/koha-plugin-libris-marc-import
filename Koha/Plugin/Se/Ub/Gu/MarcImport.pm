@@ -74,12 +74,12 @@ sub to_marc {
 
     my $config = {
         framework => $self->retrieve_data('framework') // '',
-        process_incoming_items_enable  => $self->retrieve_data('process_incoming_items_enable') || '0',
+        process_incoming_record_items_enable  => $self->retrieve_data('process_incoming_record_items_enable') || '0',
         incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
         normalize_utf8_enable => $self->retrieve_data('normalize_utf8_enable') || '0',
         normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
         deduplicate_fields_tagspecs => [split(/[\r\n]+/, $self->retrieve_data('deduplicate_fields_tagspecs') // '')], # '035a' # @FIXME tagspec/fieldspec pick one
-        deduplicate_fields_tagspecs_enable => $self->retrieve_data('deduplicate_fields_tagspecs_enable') || '0',
+        deduplicate_fields_enable => $self->retrieve_data('deduplicate_fields_enable') || '0',
         move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
         record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
         matchpoints => [split(/[\r\n]+/, $self->retrieve_data('matchpoints') // '')], # 'system-control-number,035a'
@@ -226,7 +226,7 @@ sub to_marc {
 
             ## Dedup incoming record field
             my $matched_record = $matched_record_id ? GetMarcBiblio($matched_record_id) : undef;
-            if ($config->{deduplicate_fields_tagspecs_enable}) {
+            if ($config->{deduplicate_fields_enable}) {
                 foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
                     my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-z]?)/;
                     if (!$tag_spec) {
@@ -243,14 +243,14 @@ sub to_marc {
                             # current record's field for example (and replace with incoming)
                             # Both returned sets are in the order of fields in first argument
 
-                            my @record_field = $record->field($tag);
-                            my @matched_record_field = $matched_record->field($tag);
+                            #my @record_field = $record->field($tag);
+                            #my @matched_record_field = $matched_record->field($tag);
 
                             my ($intersect_record_fields, $intersect_matched_record_fields) = marc_record_fields_intersect(
-                                \@record_field,
-                                \@matched_record_field,
-                                #\[$record->field($tag)],
-                                #\[$matched_record->field($tag)],
+                                #\@record_field,
+                                #\@matched_record_field,
+                                [$record->field($tag)],
+                                [$matched_record->field($tag)],
                                 $subfield
                             );
 
@@ -398,12 +398,13 @@ sub configure {
         $template->param(
             framework_options => $framework_options,
             framework => $self->retrieve_data('framework') // '',
+            process_incoming_record_items_enable  => $self->retrieve_data('process_incoming_record_items_enable') || '0',
             incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
             normalize_utf8_enable => $self->retrieve_data('normalize_utf8_enable') || '0',
             normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
             normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
             deduplicate_fields_tagspecs => $self->retrieve_data('deduplicate_fields_tagspecs') // '', # '035a'
-            deduplicate_fields_tagspecs_enable => $self->retrieve_data('deduplicate_fields_tagspecs_enable') || '0',
+            deduplicate_fields_enable => $self->retrieve_data('deduplicate_fields_enable') || '0',
             move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
             record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
             matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
@@ -420,11 +421,11 @@ sub configure {
         }
         my $config = {
             framework => $cgi->param('framework') // '',
-            process_incoming_items_enable  => $cgi->param('process_incoming_items_enable') || '0',
+            process_incoming_record_items_enable  => $cgi->param('process_incoming_record_items_enable') || '0',
             incoming_record_items_tag  => $cgi->param('incoming_record_items_tag') // '',
             normalize_utf8_enable => $cgi->param('normalize_utf8_enable') || '0',
             normalize_utf8_normalization_form => $cgi->param('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
-            deduplicate_fields_tagspecs_enable => $cgi->param('deduplicate_fields_tagspecs_enable') || '0',
+            deduplicate_fields_enable => $cgi->param('deduplicate_fields_enable') || '0',
             deduplicate_fields_tagspecs => $cgi->param('deduplicate_fields_tagspecs') // '',
             move_incoming_control_number_enable => $cgi->param('move_incoming_control_number_enable') || '0',
             record_matching_enable => $cgi->param('record_matching_enable') || '0',
@@ -443,10 +444,10 @@ sub configure {
         # Validate
         validate_option($config->{framework}, \@valid_frameworkcodes, 'Framework');
         my $checkbox_options = ['0', '1'];
-        validate_option($config->{normalize_utf8}, $checkbox_options, 'Normalize UTF-8');
+        validate_option($config->{normalize_utf8_enable}, $checkbox_options, 'Normalize UTF-8');
         validate_option($config->{move_incoming_control_number_enable}, $checkbox_options, 'Move incoming control number');
-        validate_option($config->{process_incoming_items_enable}, $checkbox_options, 'Process incoming items');
-        validate_option($config->{deduplicate_fields_tagspecs_enable}, $checkbox_options, 'Enable deduplicate fields');
+        validate_option($config->{process_incoming_record_items_enable}, $checkbox_options, 'Process incoming items');
+        validate_option($config->{deduplicate_fields_enable}, $checkbox_options, 'Enable deduplicate fields');
 
         # Save
         $self->store_data($config);
