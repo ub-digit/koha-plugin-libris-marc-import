@@ -281,18 +281,20 @@ sub to_marc {
                         }
                     }
                 }
-                ## Set koha local id if we got match
-                if ($matched_record_id) {
-                    # Remove old koha field if present
-                    my @local_id_fields = $record->field($koha_local_id_tag);
-                    if (@local_id_fields) {
-                        $record->delete_fields(@local_id_fields);
-                    }
-                    # Set matched id as local id
-                    my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $matched_record_id);
-                    $record->insert_fields_ordered($local_id_field);
+            }
+            ## Set koha local id if we got match
+            if ($matched_record_id) {
+                # Remove old koha field if present
+                my @local_id_fields = $record->field($koha_local_id_tag);
+                if (@local_id_fields) {
+                    $record->delete_fields(@local_id_fields);
                 }
+                # Set matched id as local id
+                my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $matched_record_id);
+                $record->insert_fields_ordered($local_id_field);
+            }
 
+            if ($options->{process_incoming_record_items_enable}) {
                 my @koha_item_fields = ();
                 foreach my $libris_item_field ($record->field($config->{incoming_record_items_tag})) {
                     my %subfield_values = ();
