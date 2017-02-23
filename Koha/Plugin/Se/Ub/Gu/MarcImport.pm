@@ -141,15 +141,14 @@ sub to_marc {
         ## Move incoming control number
         if ($config->{move_incoming_control_number_enable}) {
             my $control_number_identifier_field = $record->field('003');
-            my $system_control_number = (
-                $control_number_identifier_field && $control_number_identifier_field->data ?
-                '(' . $control_number_identifier_field->data . ')' : ''
-            ) . $record->field('001')->data;
-
-            my @record_system_control_numbers = $record->subfield('035', 'a');
-            # Add if not already present
-            if(!(@record_system_control_numbers && (any { $_ eq $system_control_number } @record_system_control_numbers))) {
-                $record->insert_fields_ordered(MARC::Field->new('035', ' ', ' ', 'a' => $system_control_number));
+            my $control_number = $record->field('001');
+            if ($control_number_identifier_field && $control_number) {
+                my $system_control_number = '(' . $control_number_identifier_field->data . ')' . $record->field('001')->data;
+                my @record_system_control_numbers = $record->subfield('035', 'a');
+                # Add if not already present
+                if(!(@record_system_control_numbers && (any { $_ eq $system_control_number } @record_system_control_numbers))) {
+                    $record->insert_fields_ordered(MARC::Field->new('035', ' ', ' ', 'a' => $system_control_number));
+                }
             }
         }
         my $matched_record_id = $koha_local_record_id;
@@ -180,7 +179,7 @@ sub to_marc {
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
-                        warn "Nore than one match for $query";
+                        warn "More than one match for $query";
                     }
                     else {
                         warn "No match for $query";
