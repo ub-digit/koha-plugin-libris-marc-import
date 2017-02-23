@@ -294,7 +294,7 @@ sub to_marc {
                 $record->insert_fields_ordered($local_id_field);
             }
 
-            if ($options->{process_incoming_record_items_enable}) {
+            if ($config->{process_incoming_record_items_enable}) {
                 my @koha_item_fields = ();
                 foreach my $libris_item_field ($record->field($config->{incoming_record_items_tag})) {
                     my %subfield_values = ();
