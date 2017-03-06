@@ -5,12 +5,16 @@ use Modern::Perl;
 ## Required for all plugins
 use base qw(Koha::Plugins::Base);
 
+#TODO: Framework argument, should use existing framework for exising records, and fallback to the provided one
+
 ## We will also need to include any Koha libraries we want to access
 use C4::Context;
 use C4::Biblio;
 use C4::Items;
 use C4::Search;
 use C4::Charset qw(SetUTF8Flag);
+use C4::Koha qw(GetItemTypes);
+use Koha::Libraries;
 use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
 use Koha::BiblioFrameworks;
@@ -68,6 +72,13 @@ sub to_marc {
 
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
 
+    my %valid_item_types = %{ GetItemTypes() };
+    my $branches = Koha::Libraries->search({}, {});
+    my %valid_branchcodes = ();
+    while (my $row = $branches->next) {
+        $valid_branchcodes{$row->get_column('branchcode')} = 1;
+    }
+
     # @FIXME: our?
     my $default_incoming_record_items_tag = '949';
     my $default_normalize_utf8_normalization_form = 'C';
@@ -109,7 +120,7 @@ sub to_marc {
     # my $mss = GetMarcSubfieldStructure($frameworkcode);
     my %libris_koha_subfield_mappings = (
         'F' => 't', #t: items.copynumber
-        'X' => 'y', #y: items.itype
+        #'X' => 'y', #y: items.itype # No direct mapping, must translate to internal koha item types in own mapping table
         '6' => 'p', #p: items.barcode
         'a' => 'o', #o: items.itemcallnumber
         #'s' => ??
@@ -179,6 +190,7 @@ sub to_marc {
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
+                        # TODO: Should perhaps add both records in 999c instead
                         warn "More than one match for $query";
                     }
                     else {
@@ -295,25 +307,44 @@ sub to_marc {
 
             if ($config->{process_incoming_record_items_enable}) {
                 my @koha_item_fields = ();
-                foreach my $libris_item_field ($record->field($config->{incoming_record_items_tag})) {
+                my $incoming_item_fields = $record->field($config->{incoming_record_items_tag});
+                # @FIXME should rename to incoming_item_field
+                foreach my $incoming_item_field ($incoming_item_fields) {
                     my %subfield_values = ();
                     my $data;
                     foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
-                        $data = $libris_item_field->subfield($libris_subfield);
+                        $data = $incoming_item_field->subfield($libris_subfield);
                         if ($data) {
                             $subfield_values{ $libris_koha_subfield_mappings{ $libris_subfield } } = $data;
                         }
                     }
                     # Special cases:
-                    $data = $libris_item_field->subfield('D');
+                    $data = $incoming_item_field->subfield('D');
                     if ($data) {
+                        # @TODO: Sort this out
                         $subfield_values{'c'} = substr $data, 3; #c: items.location
+                        # @TODO: validation, valid homebranch?
+                        $subfield_values{'a'} = substr $data, 3, 2; #a: items.homebranch
+                        $subfield_values{'b'} = substr $data, 3, 2; #a: items.holdingbranch @FIXME: ???
+                        if (!$valid_branchcodes{$subfield_values{'a'}}) {
+                            warn "Invalid branchcode \"$subfield_values{'a'}\" in incoming item";
+                        }
+                    }
+
+                    $data = $incoming_item_field->subfield('X');
+                    if ($data) {
+                        $subfield_values{'y'} = $data;
                     }
                     if (%subfield_values) {
                         $subfield_values{'z'} = '1';
                         # @TODO: get items field from koha instead
                         push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
                     }
+                }
+                if($incoming_item_fields) {
+                    # Delete incoming items
+                    # TODO: make this configurable/optional?
+                    $record->delete_fields($incoming_item_fields);
                 }
                 # Only need to bother if there is any actual item incoming items
                 if (@koha_item_fields) {
