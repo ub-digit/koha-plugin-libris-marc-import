@@ -309,72 +309,73 @@ sub to_marc {
                 my @koha_item_fields = ();
                 my $incoming_item_fields = $record->field($config->{incoming_record_items_tag});
                 # @FIXME should rename to incoming_item_field
-                foreach my $incoming_item_field ($incoming_item_fields) {
-                    my %subfield_values = ();
-                    my $data;
-                    foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
-                        $data = $incoming_item_field->subfield($libris_subfield);
+                if ($incoming_item_fields) {
+                    foreach my $incoming_item_field ($incoming_item_fields) {
+                        my %subfield_values = ();
+                        my $data;
+                        foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
+                            $data = $incoming_item_field->subfield($libris_subfield);
+                            if ($data) {
+                                $subfield_values{ $libris_koha_subfield_mappings{ $libris_subfield } } = $data;
+                            }
+                        }
+                        # Special cases:
+                        $data = $incoming_item_field->subfield('D');
                         if ($data) {
-                            $subfield_values{ $libris_koha_subfield_mappings{ $libris_subfield } } = $data;
+                            # @TODO: Sort this out
+                            $subfield_values{'c'} = substr $data, 3; #c: items.location
+                            # @TODO: validation, valid homebranch?
+                            $subfield_values{'a'} = substr $data, 3, 2; #a: items.homebranch
+                            $subfield_values{'b'} = substr $data, 3, 2; #a: items.holdingbranch @FIXME: ???
+                            if (!$valid_branchcodes{$subfield_values{'a'}}) {
+                                warn "Invalid branchcode \"$subfield_values{'a'}\" in incoming item";
+                            }
                         }
-                    }
-                    # Special cases:
-                    $data = $incoming_item_field->subfield('D');
-                    if ($data) {
-                        # @TODO: Sort this out
-                        $subfield_values{'c'} = substr $data, 3; #c: items.location
-                        # @TODO: validation, valid homebranch?
-                        $subfield_values{'a'} = substr $data, 3, 2; #a: items.homebranch
-                        $subfield_values{'b'} = substr $data, 3, 2; #a: items.holdingbranch @FIXME: ???
-                        if (!$valid_branchcodes{$subfield_values{'a'}}) {
-                            warn "Invalid branchcode \"$subfield_values{'a'}\" in incoming item";
-                        }
-                    }
 
-                    $data = $incoming_item_field->subfield('X');
-                    if ($data) {
-                        $subfield_values{'y'} = $data;
+                        $data = $incoming_item_field->subfield('X');
+                        if ($data) {
+                            $subfield_values{'y'} = $data;
+                        }
+                        if (%subfield_values) {
+                            $subfield_values{'z'} = '1';
+                            # @TODO: get items field from koha instead
+                            push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
+                        }
                     }
-                    if (%subfield_values) {
-                        $subfield_values{'z'} = '1';
-                        # @TODO: get items field from koha instead
-                        push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
-                    }
-                }
-                if($incoming_item_fields) {
                     # Delete incoming items
                     # TODO: make this configurable/optional?
                     $record->delete_fields($incoming_item_fields);
-                }
-                # Only need to bother if there is any actual item incoming items
-                if (@koha_item_fields) {
-                    my @new_koha_item_fields = ();
-                    my @existing_koha_items = ();
-                    if ($matched_record_id) {
-                        my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
-                        foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
-                            push @existing_koha_items, GetItem($itemnumber);
-                        }
-                    }
-                    ITEMFIELD: foreach my $item_field (@koha_item_fields) {
-                        my $incoming_item = GetKohaItemsFromMarcField($item_field, $config->{framework});
-                        # First check for possibly existing barcodes (globally)
-                        if (GetItemnumberFromBarcode($incoming_item->{'barcode'})) {
-                            next ITEMFIELD;
-                        }
-                        foreach my $existing_item (@existing_koha_items) {
-                            # If has the same shelving location code the two items are concidered equal
-                            if (
-                                $incoming_item->{'location'} eq $existing_item->{'location'} ||
-                                all { $existing_item->{$_} eq $incoming_item->{$_} } @item_comparison_props
-                            ) {
-                                next ITEMFIELD;
+
+                    # Only need to bother if there is any actual item incoming items
+                    if (@koha_item_fields) {
+                        my @new_koha_item_fields = ();
+                        my @existing_koha_items = ();
+                        if ($matched_record_id) {
+                            my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
+                            foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
+                                push @existing_koha_items, GetItem($itemnumber);
                             }
                         }
-                        push @new_koha_item_fields, $item_field;
-                    }
-                    if (@new_koha_item_fields) {
-                        $record->insert_fields_ordered(@new_koha_item_fields);
+                        ITEMFIELD: foreach my $item_field (@koha_item_fields) {
+                            my $incoming_item = GetKohaItemsFromMarcField($item_field, $config->{framework});
+                            # First check for possibly existing barcodes (globally)
+                            if (GetItemnumberFromBarcode($incoming_item->{'barcode'})) {
+                                next ITEMFIELD;
+                            }
+                            foreach my $existing_item (@existing_koha_items) {
+                                # If has the same shelving location code the two items are concidered equal
+                                if (
+                                    $incoming_item->{'location'} eq $existing_item->{'location'} ||
+                                    all { $existing_item->{$_} eq $incoming_item->{$_} } @item_comparison_props
+                                ) {
+                                    next ITEMFIELD;
+                                }
+                            }
+                            push @new_koha_item_fields, $item_field;
+                        }
+                        if (@new_koha_item_fields) {
+                            $record->insert_fields_ordered(@new_koha_item_fields);
+                        }
                     }
                 }
             }
