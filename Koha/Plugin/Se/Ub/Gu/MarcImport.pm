@@ -13,7 +13,9 @@ use C4::Biblio;
 use C4::Items;
 use C4::Search;
 use C4::Charset qw(SetUTF8Flag);
-use C4::Koha qw(GetItemTypes);
+#TODO Try removing this, probably not needed
+#use Koha qw(ItemTypes);
+#use Koha::Itemtypes;
 use Koha::Libraries;
 use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
@@ -21,6 +23,7 @@ use Koha::BiblioFrameworks;
 use MARC::Record;
 use List::MoreUtils qw(all any);
 use Unicode::Normalize qw(normalize check);
+use Koha::Exceptions;
 
 ## Here we set our plugin version
 our $VERSION = 0.01;
@@ -71,8 +74,8 @@ sub to_marc {
     my @processed_marc_records;
 
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
+    #my %valid_item_types = %{ ItemTypes() };
 
-    my %valid_item_types = %{ GetItemTypes() };
     my $branches = Koha::Libraries->search({}, {});
     my %valid_branchcodes = ();
     while (my $row = $branches->next) {
@@ -137,18 +140,21 @@ sub to_marc {
         # FIXME?: This is perhaps a bit cryptic, but since 'itemnotes' (z) has been set
         # above, including it in comparison parameters will result in a check if existing item
         # has z set to '1', and if so, don't add this item, which is what we want
-        'itemnotes',
+        # 'itemnotes',
         #'barcode', # Redundant because of previous check
     );
 
     RECORD: foreach my $record (@{$marc_records}) {
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
         if ($koha_local_record_id && !GetBiblio($koha_local_record_id)) {
-            # @TODO: Probalby from other koha instance, or some other issue
+            # Probably from other koha instance, or some other issue
+            # Koha::Exceptions::Object::Exception->throw("Koha local id set by no matching record found");
             # What to do?
             $koha_local_record_id = undef;
         }
-        # @TODO: move this?
+        my $matched_record_id = $koha_local_record_id;
+
+        # @TODO: move this later in execution?
         ## Move incoming control number
         if ($config->{move_incoming_control_number_enable}) {
             my $control_number_identifier_field = $record->field('003');
@@ -162,12 +168,6 @@ sub to_marc {
                 }
             }
         }
-        my $matched_record_id = $koha_local_record_id;
-
-        #my $sequential_match = [
-        #   'system-control-number,035a',
-        #   'local-number,999c',
-        #];
 
         ## Perform search engine based record matching
         if (!$matched_record_id && $config->{record_matching_enable}) {
@@ -176,10 +176,8 @@ sub to_marc {
                 if ($query) {
                     my ($error, $results, $totalhits) = $searcher->simple_search_compat($query, 0, 3, [$server]);
                     if (defined $error) {
-                        # TODO: improve error handling
-                        warn "Search error: $error";
-                        # TODO: or die?
-                        next SEQUENTIAL_MATCH;
+                        #Koha::Exceptions::Object::Exception->throw("Search for matching record resulted in error: $error");
+                        die("Search for matching record resulted in error: $error");
                     }
                     $results //= [];
 
@@ -190,10 +188,11 @@ sub to_marc {
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
-                        # TODO: Should perhaps add both records in 999c instead
+                        # @TODO: Should perhaps add both records in 999c instead and let downstream take care of duplicates
                         warn "More than one match for $query";
                     }
                     else {
+                        # @TODO: Really warn here?
                         warn "No match for $query";
                     }
                 }
@@ -205,10 +204,13 @@ sub to_marc {
             if ($matched_record_id) {
                 my $error = DelBiblio($matched_record_id);
                 if ($error) {
-                    warn "ERROR: Delete biblio $matched_record_id failed: $error\n";
-                    # @TODO: Or die?
-                    next RECORD;
+                    die("ERROR: Delete biblio $matched_record_id failed: $error\n");
                 }
+            }
+            else {
+                # @TODO: Throw exception instead? We really want to notify the user about this,
+                # also include record identification number
+                warn "Record marked for deletion, but no matching record found";
             }
         }
         else {
@@ -229,11 +231,45 @@ sub to_marc {
                 }
             }
             # Dedupe records, and match up fields
+            # For each subfield matched by field spec:
             # 1. Dedup incoming record field
             # 2. Dedup existing
             # 3. Intersect the two fields
             # 4. Remove intersection from both records
             # 5. Put intersection at front for both records, sorted by incoming order
+            #
+            # The reason why we modify the existing record (which might be concidered a problem since
+            # this is just a staging and is bad practice to acutally modify koha records if just staging
+            # marc posts), is:
+            #
+            # If we have and existing record (A) with a field with items:
+            #  - a
+            #  - b
+            #  - c
+            #
+            # And incoming record (B) with items (for the same field):
+            #  - a
+            #  - c
+            #
+            # A merge of B with A would result in:
+            #  - a
+            #  - c
+            #  - c
+            #
+            # Unless we make sure that the shared (intersected) items appear at same positions:
+            #
+            #  - a
+            #  - c
+            #  - b
+            #
+            #  and
+            #
+            #  - a
+            #  - c
+
+            # @FIXME: But right now we don't save the matched_record
+            # because of race condition (multiple users stages the same record and does not make the import in same order)
+            # making all this very broken.
 
             ## Dedup incoming record field
             my $matched_record = $matched_record_id ? GetMarcBiblio($matched_record_id) : undef;
@@ -246,10 +282,10 @@ sub to_marc {
                     foreach my $tag (marc_record_tag_spec_expand_tags($record, $tag_spec)) {
                         in_place_dedup_record_field($record, $tag, $subfield);
                         if ($matched_record) {
-                            # The reason why we return fields of both records is that
+                            # The reason why we return fields of both records below is that
                             # they are still not guarantied to be unique.
                             # For example, the specified subfield might match, but other
-                            # subfields might differ
+                            # subfields might differ.
                             # This is a bit of a kludge, the alternative would be to delete the
                             # current record's field for example (and replace with incoming)
                             # Both returned sets are in the order of fields in first argument
@@ -306,11 +342,13 @@ sub to_marc {
             }
 
             if ($config->{process_incoming_record_items_enable}) {
-                my @koha_item_fields = ();
+                my $existing_koha_items = undef;
+                #my @koha_item_fields = ();
+                my @new_koha_item_fields = ();
+                #my @processed_incoming_item_fields = ();
                 my $incoming_item_fields = $record->field($config->{incoming_record_items_tag});
-                # @FIXME should rename to incoming_item_field
                 if ($incoming_item_fields) {
-                    foreach my $incoming_item_field ($incoming_item_fields) {
+                    INCOMING_ITEM_FIELD: foreach my $incoming_item_field ($incoming_item_fields) {
                         my %subfield_values = ();
                         my $data;
                         foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
@@ -337,46 +375,52 @@ sub to_marc {
                             $subfield_values{'y'} = $data;
                         }
                         if (%subfield_values) {
-                            $subfield_values{'z'} = '1';
-                            # @TODO: get items field from koha instead
-                            push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
-                        }
-                    }
-                    # Delete incoming items
-                    # TODO: make this configurable/optional?
-                    $record->delete_fields($incoming_item_fields);
-
-                    # Only need to bother if there is any actual item incoming items
-                    if (@koha_item_fields) {
-                        my @new_koha_item_fields = ();
-                        my @existing_koha_items = ();
-                        if ($matched_record_id) {
-                            my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
-                            foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
-                                push @existing_koha_items, GetItem($itemnumber);
-                            }
-                        }
-                        ITEMFIELD: foreach my $item_field (@koha_item_fields) {
-                            my $incoming_item = GetKohaItemsFromMarcField($item_field, $config->{framework});
-                            # First check for possibly existing barcodes (globally)
-                            if (GetItemnumberFromBarcode($incoming_item->{'barcode'})) {
-                                next ITEMFIELD;
-                            }
-                            foreach my $existing_item (@existing_koha_items) {
-                                # If has the same shelving location code the two items are concidered equal
-                                if (
-                                    $incoming_item->{'location'} eq $existing_item->{'location'} ||
-                                    all { $existing_item->{$_} eq $incoming_item->{$_} } @item_comparison_props
-                                ) {
-                                    next ITEMFIELD;
+                            if (!(defined $existing_koha_items) && $matched_record_id) {
+                                $existing_koha_items = [];
+                                my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
+                                foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
+                                    push @{$existing_koha_items}, GetItem($itemnumber);
                                 }
                             }
-                            push @new_koha_item_fields, $item_field;
-                        }
-                        if (@new_koha_item_fields) {
-                            $record->insert_fields_ordered(@new_koha_item_fields);
+                            my $koha_item_field = MARC::Field->new($koha_items_tag, '', '', %subfield_values);
+                            my $incoming_koha_item = GetKohaItemsFromMarcField($koha_item_field, $config->{framework});
+
+                            # First check for possibly existing barcodes (globally)
+                            if (GetItemnumberFromBarcode($incoming_koha_item->{'barcode'})) {
+                                # Also set z marker?
+                                # There exists an item with same barcode as incoming item, skip
+                                next INCOMING_ITEM_FIELD;
+                            }
+                            foreach my $existing_koha_item (@{$existing_koha_items}) {
+                                if (
+                                    # If identical shelving locations the two items are considered equal, skip
+                                    $incoming_koha_item->{'location'} eq $existing_koha_item->{'location'} || (
+                                        # If item comparison properties match, and incoming item has been marked
+                                        # as previously added, skip
+                                        all {$incoming_koha_item->{$_} eq $existing_koha_item->{$_}  } @item_comparison_props &&
+                                        $incoming_item_field->subfield('z') ne '1'
+                                    )
+                                ) {
+                                    next INCOMING_ITEM_FIELD;
+                                }
+                            }
+                            # Mark incoming item as added
+                            # @TODO: VERIFY THIS REALLY UPDATES MARC RECORD FIELD BELONGS TO!
+                            $incoming_item_field->update('z' => '1');
+
+                            # Add to new items batch to be added
+                            push @new_koha_item_fields, $koha_item_field;
+
+
+                            # @TODO: get items field from koha instead
+                            #push @koha_item_fields, MARC::Field->new($koha_items_tag, '', '', %subfield_values);
                         }
                     }
+
+                    if (@new_koha_item_fields) {
+                        $record->insert_fields_ordered(@new_koha_item_fields);
+                    }
+
                 }
             }
             push @processed_marc_records, $record;
@@ -600,8 +644,6 @@ sub build_simplequery {
 
     my @search_strings;
     my ($index_field, $record_tagspec) = split (/,/, $matchpoint);
-    #TODO: bug in marcbulkimport, unable to match on non subfields?
-    #
     if (MARC::Field->is_controlfield_tag($record_tagspec)) {
         # THIS will crash and burn, must be wrapped in foreach?
         my $record_data = $record->field($record_tagspec)->data();
@@ -619,7 +661,8 @@ sub build_simplequery {
         }
     }
     else {
-        warn "Invalid matchpoint format, invalid marc-field: $matchpoint\n";
+        # @TODO: or use exceptions?
+        die("Invalid matchpoint format, invalid marc-field: $matchpoint\n");
     }
     my $QParser = C4::Context->queryparser if (C4::Context->preference('UseQueryParser'));
     my $using_elastic_search = (C4::Context->preference('SearchEngine') eq 'Elasticsearch');
