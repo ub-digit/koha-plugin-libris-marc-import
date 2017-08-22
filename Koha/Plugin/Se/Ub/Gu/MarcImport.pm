@@ -70,7 +70,27 @@ sub new {
 sub to_marc {
     my ( $self, $args ) = @_;
 
-    my $marc_records = $args->{data};
+    my @marc_records = ();
+    my $marc_record = undef;
+    my $marc_type = C4::Context->preference('marcflavour');
+    foreach my $bin_marc_record ( split(/\x1D/, $args->{data}) ) {
+        next if $bin_marc_record =~ /^\s*$/;
+        # Remove any whitespace from the beginning and
+        # end of the MARC blob, these can creep into MARC
+        # files produced by several sources.
+        $bin_marc_record =~ s/^\s+//;
+        $bin_marc_record =~ s/\s+$//;
+        eval {
+            $marc_record = MARC::Record->new_from_usmarc($bin_marc_record);
+        };
+        if ($@) {
+            die("Error parsing MARC-record: $@");
+        }
+        else {
+            push @marc_records, $marc_record;
+        }
+    }
+
     my @processed_marc_records;
 
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
@@ -144,7 +164,7 @@ sub to_marc {
         #'barcode', # Redundant because of previous check
     );
 
-    RECORD: foreach my $record (@{$marc_records}) {
+    RECORD: foreach my $record (@marc_records) {
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
         if ($koha_local_record_id && !GetBiblio($koha_local_record_id)) {
             # Probably from other koha instance, or some other issue
@@ -420,13 +440,12 @@ sub to_marc {
                     if (@new_koha_item_fields) {
                         $record->insert_fields_ordered(@new_koha_item_fields);
                     }
-
                 }
             }
             push @processed_marc_records, $record;
         }
     }
-    return \@processed_marc_records;
+    return join("\x1D", map { $_->as_usmarc() } @processed_marc_records);
 }
 
 sub GetKohaItemsFromMarcField {
@@ -608,28 +627,30 @@ sub marc_record_tag_spec_expand_tags {
     return keys %tags;
 }
 
+# @FIXME? IMPORTANT: This function will delete all fields where the dedup-subfield is unset,
+# but only if another duplicate is found. This is perhaps not very well-behaved, and should
+# be fixed
 sub in_place_dedup_record_field {
     my($record, $tag, $subfield) = @_;
     my %deduplicate_fields_tagspecs;
     my $key;
     my @fields = $record->field($tag);
+
     my $has_dups = 0;
     foreach my $field (@fields) {
         $key = $subfield ? $field->subfield($subfield) : $field->data();
-        if (exists $deduplicate_fields_tagspecs{$key}) {
-            $has_dups = 1;
-        }
-        else {
-            $deduplicate_fields_tagspecs{$key} = $field;
+        if ($key) {
+            if (exists $deduplicate_fields_tagspecs{$key}) {
+                $has_dups = 1;
+            }
+            else {
+                $deduplicate_fields_tagspecs{$key} = $field;
+            }
         }
     }
     if ($has_dups) {
-        #print "HAS DUPS!\n";
         $record->delete_fields(@fields);
         $record->insert_fields_ordered(values %deduplicate_fields_tagspecs);
-    }
-    else {
-        #print "HAS NO DUPS!\n";
     }
 }
 
