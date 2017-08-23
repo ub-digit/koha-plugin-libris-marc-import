@@ -20,6 +20,8 @@ use Koha::Libraries;
 use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
 use Koha::BiblioFrameworks;
+# use Koha::Logger;
+use Data::Dumper;
 use MARC::Record;
 use List::MoreUtils qw(all any);
 use Unicode::Normalize qw(normalize check);
@@ -69,6 +71,9 @@ sub new {
 # 5. Process items
 sub to_marc {
     my ( $self, $args ) = @_;
+
+    my $debug = $args->{debug};
+    #my $logger = Koha::Logger->get;
 
     my @marc_records = ();
     my $marc_record = undef;
@@ -141,6 +146,18 @@ sub to_marc {
     # Libris => Koha mapping
     # @TODO(!) this can not be hard coded, must be feted from koha items fields mappings
     # my $mss = GetMarcSubfieldStructure($frameworkcode);
+    #
+    # $D 9 siffror => $c LOC 6 siffror (ta bort de tre inledande nollorna)
+    # $F => $t
+    # $X => $y
+    # $6 => $p
+    # $a => $o
+    # $s => Statuskod
+    # $t => {YN}N{YN}NN
+    # 1:a {YN} == Rq == Får beställas
+    # 2:a {YN} == Om Y använd $K för lånetid
+    # $K => Lånetid
+
     my %libris_koha_subfield_mappings = (
         'F' => 't', #t: items.copynumber
         #'X' => 'y', #y: items.itype # No direct mapping, must translate to internal koha item types in own mapping table
@@ -160,6 +177,7 @@ sub to_marc {
     my @item_field_comparison_subfields = (
         'F', #copynumber
         'X', #itype
+        'D', #location and homebranch
         '6', #barcode
         'a'  #itemcallnumber
     );
@@ -363,32 +381,46 @@ sub to_marc {
             }
 
             if ($config->{process_incoming_record_items_enable}) {
-                #my $existing_koha_items = undef;
+                my $existing_koha_items = undef;
                 my @new_koha_item_fields = ();
                 # @FIXME: rename incoming record items tag to libris items tag or similar
-                my $incoming_item_fields = $record->field($config->{incoming_record_items_tag});
-                if ($incoming_item_fields) {
+                my @incoming_item_fields = $record->field($config->{incoming_record_items_tag});
+                if (@incoming_item_fields) {
                     my @existing_libris_item_fields = ();
                     if ($matched_record) {
                         @existing_libris_item_fields = $matched_record->field($config->{incoming_record_items_tag});
                     }
-                    INCOMING_ITEM_FIELD: foreach my $incoming_item_field ($incoming_item_fields) {
+                    INCOMING_ITEM_FIELD: foreach my $incoming_item_field (@incoming_item_fields) {
+                        print "\n*** Incoming item ***\n ${\$incoming_item_field->as_formatted()} \n\n" if $debug;
                         # First globally check for possibly existing barcodes
                         if ($incoming_item_field->subfield('6') && GetItemnumberFromBarcode($incoming_item_field->subfield('6'))) {
+                            print "Found existing barcode (${\$incoming_item_field->subfield('6')}), skipping\n" if $debug;
                             # There exists an item with same barcode as incoming item, skip
                             next INCOMING_ITEM_FIELD;
                         }
                         if (@existing_libris_item_fields) {
                             foreach my $existing_libris_item_field (@existing_libris_item_fields) {
+                                if ($debug) {
+                                    print "Matching fields:\n";
+                                    foreach my $subfield (@item_field_comparison_subfields) {
+                                        if ($incoming_item_field->subfield($subfield) eq $existing_libris_item_field->subfield($subfield)) {
+                                            print "$subfield (${\$existing_libris_item_field->subfield($subfield)})\n";
+                                        }
+                                    }
+                                    if( all { $incoming_item_field->subfield($_) eq $existing_libris_item_field->subfield($_)  } @item_field_comparison_subfields ) {
+                                        print "All properties match\n";
+                                        if ( $existing_libris_item_field->subfield('z') eq '1' ) {
+                                            print "With existing item note set to '1'\n";
+                                        }
+                                    }
+                                }
                                 if (
-                                    # If identical shelving locations the two items are considered equal, skip
-                                    $incoming_item_field->subfield('D') eq $existing_libris_item_field->subfield('D') || (
-                                        # If item comparison properties match, and incoming item has been marked
-                                        # as previously added, skip
-                                        all {$incoming_item_field->subfield($_) eq $existing_libris_item_field->subfield($_)  } @item_field_comparison_subfields &&
-                                        $existing_libris_item_field->subfield('z') eq '1'
-                                    )
+                                    # If item comparison properties match, and incoming item has been marked
+                                    # as previously added, skip
+                                    (all { $incoming_item_field->subfield($_) eq $existing_libris_item_field->subfield($_) } @item_field_comparison_subfields) &&
+                                    $existing_libris_item_field->subfield('z') eq '1'
                                 ) {
+                                    print "Properties match, skipping\n" if $debug;
                                     next INCOMING_ITEM_FIELD;
                                 }
                             }
@@ -403,15 +435,22 @@ sub to_marc {
                         }
                         # Special cases:
                         $data = $incoming_item_field->subfield('D');
-                        if ($data) {
-                            # @TODO: Sort this out
-                            $subfield_values{'c'} = substr $data, 3; #c: items.location
-                            # @TODO: validation, valid homebranch?
-                            $subfield_values{'a'} = substr $data, 3, 2; #a: items.homebranch
-                            $subfield_values{'b'} = substr $data, 3, 2; #a: items.holdingbranch @FIXME: ???
-                            if (!$valid_branchcodes{$subfield_values{'a'}}) {
-                                warn "Invalid branchcode \"$subfield_values{'a'}\" in incoming item";
-                            }
+                        if (length($data) != 9) {
+                            my $msg = "Invalid 'D' subfield value \"$data\" in incoming item, skipping";
+                            warn $msg;
+                            print $msg if $debug;
+                            next INCOMING_ITEM_FIELD;
+                        }
+                        # @TODO: Sort this out
+                        $subfield_values{'c'} = substr $data, 3; #c: items.location
+                        # @TODO: validation, valid homebranch?
+                        $subfield_values{'a'} = substr $data, 3, 2; #a: items.homebranch
+                        $subfield_values{'b'} = substr $data, 3, 2; #a: items.holdingbranch @FIXME: ???
+                        if (!$valid_branchcodes{$subfield_values{'a'}}) {
+                            my $msg = "Invalid branchcode \"${\$subfield_values{'a'}}\" in incoming item, skipping";
+                            warn $msg;
+                            print $msg if $debug;
+                            next INCOMING_ITEM_FIELD;
                         }
 
                         $data = $incoming_item_field->subfield('X');
@@ -419,39 +458,24 @@ sub to_marc {
                             $subfield_values{'y'} = $data;
                         }
                         if (%subfield_values) {
-                            #if (!(defined $existing_koha_items) && $matched_record_id) {
-                            #    $existing_koha_items = [];
-                            #    my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
-                            #    foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
-                            #        push @{$existing_koha_items}, GetItem($itemnumber);
-                            #    }
-                            #}
+                            if (!(defined $existing_koha_items) && $matched_record_id) {
+                                $existing_koha_items = [];
+                                my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
+                                foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
+                                    push @{$existing_koha_items}, GetItem($itemnumber);
+                                }
+                            }
                             my $koha_item_field = MARC::Field->new($koha_items_tag, '', '', %subfield_values);
-                            #my $incoming_koha_item = GetKohaItemsFromMarcField($koha_item_field, $config->{framework});
-
-                            # First globally check for possibly existing barcodes
-                            #if (GetItemnumberFromBarcode($incoming_koha_item->{'barcode'})) {
-                            #    # There exists an item with same barcode as incoming item, skip
-                            #    next INCOMING_ITEM_FIELD;
-                            #}
-                            #foreach my $existing_koha_item (@{$existing_koha_items}) {
-                            #    if (
-                            #        # If identical shelving locations the two items are considered equal, skip
-                            #        $incoming_koha_item->{'location'} eq $existing_koha_item->{'location'} || (
-                            #            # If item comparison properties match, and incoming item has been marked
-                            #            # as previously added, skip
-                            #            all {$incoming_koha_item->{$_} eq $existing_koha_item->{$_}  } @item_comparison_props &&
-                            #            #FUUUU: $existing_item_field->subfield('z') ne '1'
-                            #        )
-                            #    ) {
-                            #        next INCOMING_ITEM_FIELD;
-                            #    }
-                            #}
+                            my $incoming_koha_item = GetKohaItemsFromMarcField($koha_item_field, $config->{framework});
+                            # If identical shelving locations the two items are considered equal, skip
+                            if (any {$incoming_koha_item->{'location'} eq $_->{'location'}  } @{$existing_koha_items}) {
+                                print "Location \"${\$incoming_koha_item->{'location'}}\" matches existing item, skipping\n" if $debug;
+                                next INCOMING_ITEM_FIELD;
+                            }
                             # Mark incoming item as added
-                            # @TODO: VERIFY THIS REALLY UPDATES MARC RECORD FIELD BELONGS TO!
                             $incoming_item_field->update('z' => '1');
-
                             # Add to new items batch to be added
+                            print "New item:\n ${\Dumper($incoming_koha_item)}\n\n" if $debug;
                             push @new_koha_item_fields, $koha_item_field;
                         }
                     }
