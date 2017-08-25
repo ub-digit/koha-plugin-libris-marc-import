@@ -179,19 +179,21 @@ sub to_marc {
         'X', #itype
         'D', #location and homebranch
         '6', #barcode
-        'a'  #itemcallnumber
+        'a', #itemcallnumber
+        'z', #item note so we know is from libris (magic marker)
     );
 
-
     RECORD: foreach my $record (@marc_records) {
+        my $matched_record_id = undef; # Can remove = undef?
+        my @matched_record_ids = ();
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
-        if ($koha_local_record_id && !GetBiblio($koha_local_record_id)) {
+        if (defined($koha_local_record_id) && GetBiblio($koha_local_record_id)) {
             # Probably from other koha instance, or some other issue
             # Koha::Exceptions::Object::Exception->throw("Koha local id set by no matching record found");
             # What to do?
-            $koha_local_record_id = undef;
+            $matched_record_id = $koha_local_record_id;
+            push @matched_record_ids, $matched_record_id;
         }
-        my $matched_record_id = $koha_local_record_id;
 
         # @TODO: move this later in execution?
         ## Move incoming control number
@@ -220,10 +222,16 @@ sub to_marc {
                     }
                     $results //= [];
 
-                    if (@{$results} == 1) {
-                        my $_record = C4::Search::new_record_from_zebra($server, $results->[0]);
-                        SetUTF8Flag($_record); # From bulkmarcimport, can remove this?
-                        $matched_record_id = $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
+                    if (@{$results}) {
+                        foreach my $result (@{$results}) {
+                            my $_record = C4::Search::new_record_from_zebra($server, $result);
+                            #SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
+                            push @matched_record_ids, $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
+                        }
+                        # Need to think more about this, how handle multiple matches
+                        # This is most likely NOT a very good idea:
+                        # Set match_record_id to first matching record
+                        ($matched_record_id) = @matched_record_ids;
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
@@ -369,15 +377,17 @@ sub to_marc {
                 }
             }
             ## Set koha local id if we got match
-            if ($matched_record_id) {
+            if (@matched_record_ids) {
                 # Remove old koha field if present
                 my @local_id_fields = $record->field($koha_local_id_tag);
                 if (@local_id_fields) {
                     $record->delete_fields(@local_id_fields);
                 }
                 # Set matched id as local id
-                my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $matched_record_id);
-                $record->insert_fields_ordered($local_id_field);
+                foreach my $id (@matched_record_ids) {
+                    my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $id);
+                    $record->insert_fields_ordered($local_id_field);
+                }
             }
 
             if ($config->{process_incoming_record_items_enable}) {
@@ -385,6 +395,7 @@ sub to_marc {
                 my @new_koha_item_fields = ();
                 # @FIXME: rename incoming record items tag to libris items tag or similar
                 my @incoming_item_fields = $record->field($config->{incoming_record_items_tag});
+                #my @new_incoming_item_fields = ();
                 if (@incoming_item_fields) {
                     my @existing_libris_item_fields = ();
                     if ($matched_record) {
@@ -392,6 +403,7 @@ sub to_marc {
                     }
                     INCOMING_ITEM_FIELD: foreach my $incoming_item_field (@incoming_item_fields) {
                         print "\n*** Incoming item ***\n ${\$incoming_item_field->as_formatted()} \n\n" if $debug;
+                        $incoming_item_field->update('z' => '1');
                         # First globally check for possibly existing barcodes
                         if ($incoming_item_field->subfield('6') && GetItemnumberFromBarcode($incoming_item_field->subfield('6'))) {
                             print "Found existing barcode (${\$incoming_item_field->subfield('6')}), skipping\n" if $debug;
@@ -409,16 +421,12 @@ sub to_marc {
                                     }
                                     if( all { $incoming_item_field->subfield($_) eq $existing_libris_item_field->subfield($_)  } @item_field_comparison_subfields ) {
                                         print "All properties match\n";
-                                        if ( $existing_libris_item_field->subfield('z') eq '1' ) {
-                                            print "With existing item note set to '1'\n";
-                                        }
                                     }
                                 }
                                 if (
                                     # If item comparison properties match, and incoming item has been marked
                                     # as previously added, skip
-                                    (all { $incoming_item_field->subfield($_) eq $existing_libris_item_field->subfield($_) } @item_field_comparison_subfields) &&
-                                    $existing_libris_item_field->subfield('z') eq '1'
+                                    (all { $incoming_item_field->subfield($_) eq $existing_libris_item_field->subfield($_) } @item_field_comparison_subfields)
                                 ) {
                                     print "Properties match, skipping\n" if $debug;
                                     next INCOMING_ITEM_FIELD;
@@ -473,7 +481,7 @@ sub to_marc {
                                 next INCOMING_ITEM_FIELD;
                             }
                             # Mark incoming item as added
-                            $incoming_item_field->update('z' => '1');
+                            # $incoming_item_field->update('z' => '1');
                             # Add to new items batch to be added
                             print "New item:\n ${\Dumper($incoming_koha_item)}\n\n" if $debug;
                             push @new_koha_item_fields, $koha_item_field;
