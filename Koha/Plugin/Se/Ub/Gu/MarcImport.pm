@@ -222,21 +222,18 @@ sub to_marc {
                     }
                     $results //= [];
 
-                    if (@{$results}) {
+                    if (@{$results} == 1) {
                         foreach my $result (@{$results}) {
                             my $_record = C4::Search::new_record_from_zebra($server, $result);
                             #SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
                             push @matched_record_ids, $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
                         }
-                        # Need to think more about this, how handle multiple matches
-                        # This is most likely NOT a very good idea:
-                        # Set match_record_id to first matching record
                         ($matched_record_id) = @matched_record_ids;
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
                         # @TODO: Should perhaps add both records in 999c instead and let downstream take care of duplicates
-                        warn "More than one match for $query";
+                        die("More than one match for $query");
                     }
                     else {
                         # @TODO: Really warn here?
