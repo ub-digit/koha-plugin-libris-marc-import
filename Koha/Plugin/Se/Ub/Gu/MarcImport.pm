@@ -40,7 +40,7 @@ our $metadata = {
     author => 'David Gustafsson',
     description => 'Custom marc import tweaks (@todo: proper desc)',
     date_authored   => '2017-02-07',
-    date_updated    => '2017-02-21',
+    date_updated    => '2017-09-4',
     minimum_version => '16.05',
     maximum_version => undef,
     version         => $VERSION,
@@ -436,17 +436,17 @@ sub to_marc {
                         }
                         # Special cases:
                         $data = $incoming_item_field->subfield('D');
-                        if (length($data) != 9) {
-                            my $msg = "Invalid 'D' subfield value \"$data\" in incoming item, skipping";
-                            warn $msg;
-                            print $msg if $debug;
-                            next INCOMING_ITEM_FIELD;
-                        }
+                        #if (length($data) != 9) {
+                        #    my $msg = "Invalid 'D' subfield value \"$data\" in incoming item, skipping";
+                        #    warn $msg;
+                        #    print $msg if $debug;
+                        #    next INCOMING_ITEM_FIELD;
+                        #}
                         # @TODO: Sort this out
-                        $subfield_values{'c'} = substr $data, 3; #c: items.location
+                        $subfield_values{'c'} = substr $data, -6; #c: items.location
                         # @TODO: validation, valid homebranch?
-                        $subfield_values{'a'} = substr $data, 3, 2; #a: items.homebranch
-                        $subfield_values{'b'} = substr $data, 3, 2; #a: items.holdingbranch @FIXME: ???
+                        $subfield_values{'a'} = substr $data, -6, 2; #a: items.homebranch
+                        $subfield_values{'b'} = substr $data, -6, 2; #a: items.holdingbranch @FIXME: ???
                         if (!$valid_branchcodes{$subfield_values{'a'}}) {
                             my $msg = "Invalid branchcode \"${\$subfield_values{'a'}}\" in incoming item, skipping";
                             warn $msg;
