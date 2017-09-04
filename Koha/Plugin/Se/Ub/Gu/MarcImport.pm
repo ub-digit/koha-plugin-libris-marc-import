@@ -1,7 +1,7 @@
 package Koha::Plugin::Se::Ub::Gu::MarcImport;
 
 use Modern::Perl;
-
+use Encode qw(encode);
 ## Required for all plugins
 use base qw(Koha::Plugins::Base);
 
@@ -23,6 +23,10 @@ use Koha::BiblioFrameworks;
 # use Koha::Logger;
 use Data::Dumper;
 use MARC::Record;
+use MARC::Batch;
+use MARC::File::USMARC;
+use MARC::File::XML; #TODO: Sniff xml of incoming data and support this
+# use MARC::Charset; #?
 use List::MoreUtils qw(all any);
 use Unicode::Normalize qw(normalize check);
 use Koha::Exceptions;
@@ -78,22 +82,13 @@ sub to_marc {
     my @marc_records = ();
     my $marc_record = undef;
     my $marc_type = C4::Context->preference('marcflavour');
-    foreach my $bin_marc_record ( split(/\x1D/, $args->{data}) ) {
-        next if $bin_marc_record =~ /^\s*$/;
-        # Remove any whitespace from the beginning and
-        # end of the MARC blob, these can creep into MARC
-        # files produced by several sources.
-        $bin_marc_record =~ s/^\s+//;
-        $bin_marc_record =~ s/\s+$//;
-        eval {
-            $marc_record = MARC::Record->new_from_usmarc($bin_marc_record);
-        };
-        if ($@) {
-            die("Error parsing MARC-record: $@");
-        }
-        else {
-            push @marc_records, $marc_record;
-        }
+
+    my $marc_batch;
+    my $fh;
+    {
+        open($fh, "<", \$args->{data});
+        binmode $fh, ':raw';
+        $marc_batch = MARC::Batch->new('USMARC', $fh);
     }
 
     my @processed_marc_records;
@@ -183,7 +178,8 @@ sub to_marc {
         'z', #item note so we know is from libris (magic marker)
     );
 
-    RECORD: foreach my $record (@marc_records) {
+    RECORD: while(my $record = $marc_batch->next()) {
+
         my $matched_record_id = undef; # Can remove = undef?
         my @matched_record_ids = ();
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
@@ -225,7 +221,7 @@ sub to_marc {
                     if (@{$results} == 1) {
                         foreach my $result (@{$results}) {
                             my $_record = C4::Search::new_record_from_zebra($server, $result);
-                            #SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
+                            SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
                             push @matched_record_ids, $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
                         }
                         ($matched_record_id) = @matched_record_ids;
@@ -399,8 +395,8 @@ sub to_marc {
                         @existing_libris_item_fields = $matched_record->field($config->{incoming_record_items_tag});
                     }
                     INCOMING_ITEM_FIELD: foreach my $incoming_item_field (@incoming_item_fields) {
-                        print "\n*** Incoming item ***\n ${\$incoming_item_field->as_formatted()} \n\n" if $debug;
                         $incoming_item_field->update('z' => '1');
+                        print "\n*** Incoming item ***\n ${\$incoming_item_field->as_formatted()} \n\n" if $debug;
                         # First globally check for possibly existing barcodes
                         if ($incoming_item_field->subfield('6') && GetItemnumberFromBarcode($incoming_item_field->subfield('6'))) {
                             print "Found existing barcode (${\$incoming_item_field->subfield('6')}), skipping\n" if $debug;
@@ -492,7 +488,8 @@ sub to_marc {
             push @processed_marc_records, $record;
         }
     }
-    return join("\x1D", map { $_->as_usmarc() } @processed_marc_records);
+    close($fh); # This can probably be omitted, no point in closing file handle to in memory variable?
+    return encode('UTF-8', join("", map { $_->as_usmarc() } @processed_marc_records), 1);
 }
 
 sub GetKohaItemsFromMarcField {
