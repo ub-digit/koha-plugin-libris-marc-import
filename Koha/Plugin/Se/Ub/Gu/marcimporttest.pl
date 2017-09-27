@@ -26,12 +26,13 @@ sub _RecordsFromMARCXMLFile {
 #use Data::Dumper;
 #print $records->[0]->as_xml();
 
-my $bin_marc_file = '/home/vagrant/SMALL.GUB.ADJUSTED.ITEMS.20161204.marc';
+#my $bin_marc_file = '/home/vagrant/SMALL.GUB.ADJUSTED.ITEMS.20161204.marc';
+my $bin_marc_file = '/home/vagrant/SMALL.GUB.ADJUSTED.TEST.marc';
 my $bin_marc = undef;
 {
     local $/ = undef;
     open FILE, $bin_marc_file;
-    binmode FILE;
+    binmode FILE, ':raw';
     $bin_marc = <FILE>;
     close FILE;
 }
@@ -39,4 +40,10 @@ my $bin_marc = undef;
 my $plugin = __PACKAGE__->new({});
 $bin_marc = $plugin->to_marc({ data => $bin_marc, 'debug' => 1 });
 use Data::Dumper;
-#print Dumper($bin_marc);
+{
+    open FILE, ">>", "/tmp/marcrecord";
+    binmode FILE;
+    print FILE $bin_marc;
+    close(FILE);
+}
+#print $bin_marc;

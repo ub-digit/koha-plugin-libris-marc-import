@@ -155,10 +155,10 @@ sub to_marc {
 
     my %libris_koha_subfield_mappings = (
         'F' => 't', #t: items.copynumber
-        #'X' => 'y', #y: items.itype # No direct mapping, must translate to internal koha item types in own mapping table
+        'X' => 'y', #y: items.itype # No direct mapping, must translate to internal koha item types in own mapping table
         '6' => 'p', #p: items.barcode
         'a' => 'o', #o: items.itemcallnumber
-        #'s' => ??
+        's' => '7' #7: Not for loan
         #'t' => ??
         #'K' => ??,
     );
@@ -408,6 +408,12 @@ sub to_marc {
                                 if ($debug) {
                                     print "Matching fields:\n";
                                     foreach my $subfield (@item_field_comparison_subfields) {
+                                        if (!$incoming_item_field->subfield($subfield)) {
+                                            print "Subfield \"$subfield\" not set for incoming item.\n" if $debug;
+                                        }
+                                        if (!$existing_libris_item_field->subfield($subfield)) {
+                                            print "Subfield \"$subfield\" not set for existing item.\n" if $debug;
+                                        }
                                         if ($incoming_item_field->subfield($subfield) eq $existing_libris_item_field->subfield($subfield)) {
                                             print "$subfield (${\$existing_libris_item_field->subfield($subfield)})\n";
                                         }
