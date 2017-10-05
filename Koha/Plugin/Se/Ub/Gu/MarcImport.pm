@@ -312,7 +312,7 @@ sub to_marc {
             # making all this very broken.
 
             ## Dedup incoming record field
-            my $matched_record = $matched_record_id ? GetMarcBiblio($matched_record_id) : undef;
+            my $matched_record = $matched_record_id ? GetMarcBiblio({biblionumber => $matched_record_id}) : undef;
             if ($config->{deduplicate_fields_enable}) {
                 foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
                     my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-z]?)/;
