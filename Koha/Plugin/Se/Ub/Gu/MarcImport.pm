@@ -315,7 +315,7 @@ sub to_marc {
             my $matched_record = $matched_record_id ? GetMarcBiblio({biblionumber => $matched_record_id}) : undef;
             if ($config->{deduplicate_fields_enable}) {
                 foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
-                    my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-z]?)/;
+                    my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-zA-Z0-9])/;
                     if (!$tag_spec) {
                         die "Empty or invalid tag-spec: \"$tag_spec\"";
                     }
