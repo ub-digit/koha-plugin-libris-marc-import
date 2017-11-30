@@ -554,6 +554,8 @@ sub configure {
             move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
             record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
             matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
+            stash_failed_records_enable => $self->retrieve_data('stash_failed_records_enable') || '0',
+            stash_failed_records_directory => $self->retrieve_data('stash_failed_records_directory') // '',
         );
         print $cgi->header();
         print $template->output();
@@ -576,7 +578,9 @@ sub configure {
             move_incoming_control_number_enable => $cgi->param('move_incoming_control_number_enable') || '0',
             record_matching_enable => $cgi->param('record_matching_enable') || '0',
             matchpoints => $cgi->param('matchpoints') // '',
-            last_configured_by => C4::Context->userenv->{'number'},
+            stash_failed_records_enable => $cgi->param('stash_failed_records_enable') || '0',
+            stash_failed_records_directory => $cgi->param('stash_failed_records_directory') // '',
+            last_configured_by => C4::Context->userenv->{'number'}
         };
         #TODO: regexp validation for non-options settings
         # Seems reset is not necessary?
@@ -594,6 +598,7 @@ sub configure {
         validate_option($config->{move_incoming_control_number_enable}, $checkbox_options, 'Move incoming control number');
         validate_option($config->{process_incoming_record_items_enable}, $checkbox_options, 'Process incoming items');
         validate_option($config->{deduplicate_fields_enable}, $checkbox_options, 'Enable deduplicate fields');
+        validate_option($config->{stash_failed_records_enable}, $checkbox_options, 'Stash field records');
 
         # Save
         $self->store_data($config);

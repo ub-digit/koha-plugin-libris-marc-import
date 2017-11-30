@@ -127,6 +127,23 @@
         </li>
         </ol>
         </fieldset>
+        <fieldset class="rows">
+        <legend>Stash failed records</legend>
+        <ol>
+        <li>
+            <label for="stash_failed_records_enable">Enable:</label>
+            [% IF record_matching_enable %]
+                <input id="stash_failed_records_enable" type="checkbox" name="stash_failed_records_enable"" value="1" checked>
+            [% ELSE %]
+                <input id="stash_failed_records_enable" type="checkbox" name="stash_failed_records_enable"" value="1">
+            [% END %]
+        </li>
+        <li>
+            <label for="stash_failed_records_directory">Directory:</label>
+            <input id="stash_failed_records_directory" type="text" name="stash_failed_records_directory" value="[% stash_failed_records_directory %]" />
+        </li>
+        </ol>
+        </fieldset>
         <input type="hidden" name="save" value="1" />
         <fieldset class="action">
             <input type="submit" value="Save configuration" />
