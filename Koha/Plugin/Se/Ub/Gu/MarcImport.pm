@@ -30,6 +30,9 @@ use MARC::File::XML; #TODO: Sniff xml of incoming data and support this
 use List::MoreUtils qw(all any);
 use Unicode::Normalize qw(normalize check);
 use Koha::Exceptions;
+use Digest::MD5 qw(md5_hex);
+use POSIX qw(strftime);
+use File::Path qw(make_path);
 
 ## Here we set our plugin version
 our $VERSION = 0.01;
@@ -177,8 +180,30 @@ sub to_marc {
         'a', #itemcallnumber
         'z', #item note so we know is from libris (magic marker)
     );
-
-    RECORD: while(my $record = $marc_batch->next()) {
+    my $i = -1;
+    RECORD: while(1) {
+        $i++;
+        my $record;
+        # Infinite loop and eval so can catch marc decode/parsing errors
+        eval { $record = $marc_batch->next() };
+        if ($@) {
+            # \x1D is end of record
+            # TODO: Think record always undef if errors occured
+            # so this check can probably be removed
+            my $record_data = undef;
+            if (defined $record) {
+                $record_data = $record->as_usmarc;
+            }
+            else {
+                my @records_raw = split("\x1D", $args->{data});
+                $record_data = $records_raw[$i];
+            }
+            $self->_stashFailedMarcRecord($record_data, "invalid_record", "Failed to parse MARC record: $@");
+            next;
+        }
+        elsif(!$record) {
+            last;
+        }
 
         my $matched_record_id = undef; # Can remove = undef?
         my @matched_record_ids = ();
@@ -214,6 +239,7 @@ sub to_marc {
                     my ($error, $results, $totalhits) = $searcher->simple_search_compat($query, 0, 3, [$server]);
                     if (defined $error) {
                         #Koha::Exceptions::Object::Exception->throw("Search for matching record resulted in error: $error");
+                        # TODO: Write to log instead
                         die("Search for matching record resulted in error: $error");
                     }
                     $results //= [];
@@ -229,7 +255,9 @@ sub to_marc {
                     }
                     elsif (@{$results} > 1) {
                         # @TODO: Should perhaps add both records in 999c instead and let downstream take care of duplicates
-                        die("More than one match for $query");
+                        my $error = "More than one match for $query";
+                        warn $error;
+                        $self->_stashFailedMarcRecord($record->as_usmarc(), "multiple_matches", $error);
                     }
                     else {
                         # @TODO: Really warn here?
@@ -498,6 +526,8 @@ sub to_marc {
     return encode('UTF-8', join("", map { $_->as_usmarc() } @processed_marc_records), 1);
 }
 
+# TODO: underscore private methods/subs?
+
 sub GetKohaItemsFromMarcField {
     my ($item_field, $frameworkcode) = @_;
     my $temp_item_marc = MARC::Record->new();
@@ -524,6 +554,36 @@ sub GetKohaItemsFromMarcRecord {
         push @koha_items, $item;
     }
     return @koha_items;
+}
+
+sub _stashFailedMarcRecord {
+    my ($self, $record_data, $error_type, $error_msg) = @_;
+    my $directory = $self->retrieve_data('stash_failed_records_directory');
+    if ($self->retrieve_data('stash_failed_records_enable') && length($directory)) {
+        # Create error type directory if not exists
+        my $output_dir = "$directory/$error_type";
+        # TODO: error if failed to create
+        make_path("$output_dir", {
+            chmod => 0777,
+            error => \my $err
+        });
+        if (@$err) {
+            die("Unable to create $output_dir");
+        }
+        my $record_hash = md5_hex($record_data);
+        my $date = strftime "%d-%m-%Y", localtime;
+        my $fh;
+        # TODO: Possible UTF-8 encoding woes, is this ok?
+        # TODO: Hmm, probably will fail with raw records vs from ->as_usmarc??
+        my $filename = "$output_dir/$date.$record_hash.marc";
+        open($fh, ">", $filename) or die("Can't open $filename for writing!");
+        print $fh $record_data;
+        close($fh);
+        $filename = "$output_dir/$date.$record_hash.error";
+        open($fh, ">", $filename) or die("Can't open $filename for writing!");
+        print $fh $error_msg;
+        close($fh);
+    }
 }
 
 sub configure {
