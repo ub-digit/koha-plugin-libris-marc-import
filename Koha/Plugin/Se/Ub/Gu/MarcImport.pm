@@ -120,6 +120,7 @@ sub to_marc {
         move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
         record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
         matchpoints => [split(/[\r\n]+/, $self->retrieve_data('matchpoints') // '')], # 'system-control-number,035a'
+        protect_authority_linkage_enable => $self->retrieve_data('protect_authority_linkage_enable') || '0',
     };
 
     #TODO: setting
@@ -522,8 +523,51 @@ sub to_marc {
             push @processed_marc_records, $record;
         }
     }
+    if ($config->{protect_authority_linkage_enable}) {
+        my $dbh = C4::Context->dbh;
+        # TODO: Could make field name configurable, and muliple values allowed
+        my $field_specs = $dbh->selectcol_arrayref(qq{
+            SELECT `marc_field` FROM `search_marc_map` JOIN `search_marc_to_field`
+                ON `search_marc_map`.`id` = `search_marc_to_field`.`search_marc_map_id`
+            JOIN `search_field`
+                ON `search_marc_to_field`.`search_field_id` = `search_field`.`id`
+            WHERE `search_field`.`name` = ? AND `search_marc_map`.`marc_type` = ?
+        }, undef, 'koha-auth-number', $marc_type);
+        _pruneMarcRecords($field_specs, \@processed_marc_records);
+    }
     close($fh); # This can probably be omitted, no point in closing file handle to in memory variable?
     return encode('UTF-8', join("", map { $_->as_usmarc() } @processed_marc_records), 1);
+}
+
+sub _pruneMarcRecords {
+    my ($field_specs_prune, $records) = @_;
+    my %prune_fields;
+    my $field_regex = qr/([0-9]{3})([a-zA-Z0-9])*/;
+    foreach my $field_spec (@{$field_specs_prune}) {
+        my ($tag, $subfields) = $field_spec =~ $field_regex;
+        if ($tag) {
+            $prune_fields{$tag} = $subfields ? [split(//, $subfields)] : undef;
+        }
+    }
+    my @fields_delete;
+    foreach my $record (@{$records}) {
+        @fields_delete = ();
+        foreach my $field ($record->fields()) {
+            my $tag = $field->tag();
+            if (exists $prune_fields{$tag}) {
+                my $subfields = $prune_fields{$tag};
+                if ($subfields) {
+                    $field->delete_subfield(code => $subfields);
+                }
+                else {
+                    push @fields_delete, $field;
+                }
+            }
+        }
+        if (@fields_delete) {
+            $record->delete_fields(@fields_delete);
+        }
+    }
 }
 
 # TODO: underscore private methods/subs?
@@ -616,6 +660,7 @@ sub configure {
             matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
             stash_failed_records_enable => $self->retrieve_data('stash_failed_records_enable') || '0',
             stash_failed_records_directory => $self->retrieve_data('stash_failed_records_directory') // '',
+            protect_authority_linkage_enable => $self->retrieve_data('protect_authority_linkage_enable') || '0'
         );
         print $cgi->header();
         print $template->output();
@@ -640,6 +685,7 @@ sub configure {
             matchpoints => $cgi->param('matchpoints') // '',
             stash_failed_records_enable => $cgi->param('stash_failed_records_enable') || '0',
             stash_failed_records_directory => $cgi->param('stash_failed_records_directory') // '',
+            protect_authority_linkage_enable => $cgi->param('protect_authority_linkage_enable') || '0',
             last_configured_by => C4::Context->userenv->{'number'}
         };
         #TODO: regexp validation for non-options settings
@@ -659,6 +705,7 @@ sub configure {
         validate_option($config->{process_incoming_record_items_enable}, $checkbox_options, 'Process incoming items');
         validate_option($config->{deduplicate_fields_enable}, $checkbox_options, 'Enable deduplicate fields');
         validate_option($config->{stash_failed_records_enable}, $checkbox_options, 'Stash field records');
+        validate_option($config->{protect_authority_linkage_enable}, $checkbox_options, 'Protect autority linkage');
 
         # Save
         $self->store_data($config);
