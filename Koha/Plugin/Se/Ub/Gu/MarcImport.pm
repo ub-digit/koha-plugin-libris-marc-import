@@ -207,14 +207,12 @@ sub to_marc {
         }
 
         my $matched_record_id = undef; # Can remove = undef?
-        my @matched_record_ids = ();
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
         if (defined($koha_local_record_id) && GetBiblio($koha_local_record_id)) {
             # Probably from other koha instance, or some other issue
             # Koha::Exceptions::Object::Exception->throw("Koha local id set by no matching record found");
             # What to do?
             $matched_record_id = $koha_local_record_id;
-            push @matched_record_ids, $matched_record_id;
         }
 
         # @TODO: move this later in execution?
@@ -249,9 +247,8 @@ sub to_marc {
                         foreach my $result (@{$results}) {
                             my $_record = C4::Search::new_record_from_zebra($server, $result);
                             SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
-                            push @matched_record_ids, $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
+                            $matched_record_id = $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
                         }
-                        ($matched_record_id) = @matched_record_ids;
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
@@ -299,49 +296,7 @@ sub to_marc {
                     die("Invalid UTF-8 normalization form: $config->{normalize_utf8_normalization_form}");
                 }
             }
-            # Dedupe records, and match up fields
-            # For each subfield matched by field spec:
-            # 1. Dedup incoming record field
-            # 2. Dedup existing
-            # 3. Intersect the two fields
-            # 4. Remove intersection from both records
-            # 5. Put intersection at front for both records, sorted by incoming order
-            #
-            # The reason why we modify the existing record (which might be concidered a problem since
-            # this is just a staging and is bad practice to acutally modify koha records if just staging
-            # marc posts), is:
-            #
-            # If we have and existing record (A) with a field with items:
-            #  - a
-            #  - b
-            #  - c
-            #
-            # And incoming record (B) with items (for the same field):
-            #  - a
-            #  - c
-            #
-            # A merge of B with A would result in:
-            #  - a
-            #  - c
-            #  - c
-            #
-            # Unless we make sure that the shared (intersected) items appear at same positions:
-            #
-            #  - a
-            #  - c
-            #  - b
-            #
-            #  and
-            #
-            #  - a
-            #  - c
-
-            # @FIXME: But right now we don't save the matched_record
-            # because of race condition (multiple users stages the same record and does not make the import in same order)
-            # making all this very broken.
-
             ## Dedup incoming record field
-            my $matched_record = $matched_record_id ? GetMarcBiblio({biblionumber => $matched_record_id}) : undef;
             if ($config->{deduplicate_fields_enable}) {
                 foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
                     my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-zA-Z0-9])/;
@@ -350,69 +305,23 @@ sub to_marc {
                     }
                     foreach my $tag (marc_record_tag_spec_expand_tags($record, $tag_spec)) {
                         in_place_dedup_record_field($record, $tag, $subfield);
-                        if ($matched_record) {
-                            # The reason why we return fields of both records below is that
-                            # they are still not guarantied to be unique.
-                            # For example, the specified subfield might match, but other
-                            # subfields might differ.
-                            # This is a bit of a kludge, the alternative would be to delete the
-                            # current record's field for example (and replace with incoming)
-                            # Both returned sets are in the order of fields in first argument
-
-                            #my @record_field = $record->field($tag);
-                            #my @matched_record_field = $matched_record->field($tag);
-
-                            my ($intersect_record_fields, $intersect_matched_record_fields) = marc_record_fields_intersect(
-                                #\@record_field,
-                                #\@matched_record_field,
-                                [$record->field($tag)],
-                                [$matched_record->field($tag)],
-                                $subfield
-                            );
-
-                            if (@{$intersect_record_fields}) {
-                                # Delete existing record fields in intersection
-                                $matched_record->delete_fields(@{$intersect_matched_record_fields});
-
-                                # Re-add fields of existing record at the front, in order of intersected fields
-                                # of incoming record
-                                my $before_field = $matched_record->field($tag);
-                                if ($before_field) {
-                                    $matched_record->insert_fields_before($before_field, @{$intersect_matched_record_fields});
-                                }
-                                else {
-                                    $matched_record->insert_fields_ordered(@{$intersect_matched_record_fields});
-                                }
-
-                                # Do the same thing with incoming record
-                                $record->delete_fields(@{$intersect_record_fields});
-                                $before_field = $record->field($tag);
-                                if ($before_field) {
-                                    $record->insert_fields_before($before_field, @{$intersect_record_fields});
-                                }
-                                else {
-                                    $record->insert_fields_ordered(@{$intersect_record_fields});
-                                }
-                            }
-                        }
                     }
                 }
             }
             ## Set koha local id if we got match
-            if (@matched_record_ids) {
+            if ($matched_record_id) {
                 # Remove old koha field if present
                 my @local_id_fields = $record->field($koha_local_id_tag);
                 if (@local_id_fields) {
                     $record->delete_fields(@local_id_fields);
                 }
                 # Set matched id as local id
-                foreach my $id (@matched_record_ids) {
-                    my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $id);
-                    $record->insert_fields_ordered($local_id_field);
-                }
+                my $local_id_field = MARC::Field->new($koha_local_id_tag, '', '', $koha_local_id_subfield => $matched_record_id);
+                $record->insert_fields_ordered($local_id_field);
             }
 
             if ($config->{process_incoming_record_items_enable}) {
+                my $matched_record = $matched_record_id ? GetMarcBiblio({biblionumber => $matched_record_id}) : undef;
                 my $existing_koha_items = undef;
                 my @new_koha_item_fields = ();
                 # @FIXME: rename incoming record items tag to libris items tag or similar
