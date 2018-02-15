@@ -318,6 +318,7 @@ sub to_marc {
 # 2:a {YN} == Om Y använd $K för lånetid
 # $K => Lånetid
 
+# TODO: add 't' and 'K'!!
 use constant {
     LIBRIS_ITEM_COPYNUMBER => 'F',
     LIBRIS_ITEM_TYPE => 'X',
@@ -403,7 +404,7 @@ sub _processIncomingRecordItems {
     INCOMING_ITEM_FIELD: foreach my $incoming_item_field (@incoming_item_fields) {
 
         # This will set note to '1' in $record since this is an object (reference)
-        $incoming_item_field->update(LIBRIS_ITEM_NOTE => '1');
+        $incoming_item_field->update(LIBRIS_ITEM_NOTE, '1');
         print "\n*** Incoming item ***\n ${\$incoming_item_field->as_formatted()} \n\n" if $debug;
 
         # First globally check for possibly existing barcodes
@@ -449,9 +450,8 @@ sub _processIncomingRecordItems {
 
         # First process all direct mappings
         foreach my $libris_subfield (keys %libris_koha_subfield_mappings) {
-            print "$libris_subfield\n";
             $data = $incoming_item_field->subfield($libris_subfield);
-            if ($data) {
+            if (defined $data) {
                 $koha_subfield_values{ $libris_koha_subfield_mappings{ $libris_subfield } } = $data;
             }
         }
