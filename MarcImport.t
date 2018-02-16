@@ -16,7 +16,7 @@ use Koha::AuthorisedValue;
 #use Test::MockModule;
 use Test::MockObject::Extends;
 use t::lib::Mocks;
-use Test::More tests => 36;
+use Test::More tests => 47;
 use C4::Context;
 use Koha::Plugins;
 use Koha::Database;
@@ -47,6 +47,19 @@ $plugin->mock('retrieve_data', sub {
     }
 );
 
+my $frameworkcode = ''; # TODO: Get this from pref?
+my ($item_tag, $item_subfield) = C4::Biblio::GetMarcFromKohaField('items.itemnumber', $frameworkcode);
+my $libris_item_tag = $plugin->retrieve_data('incoming_record_items_tag');
+my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $frameworkcode);
+my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
+
+my $plugin_process_record = sub {
+    my ($record, $test_message) = @_;
+    my $processed_record_marc = $plugin->to_marc({ data => $record->as_usmarc() });
+    ok($processed_record_marc, $test_message);
+    return MARC::Record->new_from_usmarc($processed_record_marc);
+};
+
 my $schema = Koha::Database->new->schema;
 $schema->storage->txn_begin;
 
@@ -74,7 +87,6 @@ my $itemtype = Koha::ItemType->new({
 eval { $itemtype->store; };
 is($@, '', "Test item type was successfully saved");
 
-# TODO: Assert that created ($@ is empty)
 my $library_branchcode = '12';
 my $library = Koha::Library->new({
 	branchcode => $library_branchcode,
@@ -112,11 +124,11 @@ my @fields = (
         '008',
         '970115m19979999maua          001 0 eng'
     ),
-    # System-contol-number
     MARC::Field->new(
         '035', ' ', ' ',
         a => '(035TEST)123',
     ),
+    # Duplicate system-control-number
     MARC::Field->new(
         '035', ' ', ' ',
         a => '(035TEST)123',
@@ -138,22 +150,12 @@ my @fields = (
     ),
 );
 $record->append_fields(@fields);
-
-# Add biblio without item
-my $frameworkcode = ''; # TODO: Get this from pref?
-my ($item_tag, $item_subfield) = C4::Biblio::GetMarcFromKohaField('items.itemnumber', $frameworkcode);
-my $libris_item_tag = $plugin->retrieve_data('incoming_record_items_tag');
-my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $frameworkcode);
-my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
-
-my $processed_record_marc = $plugin->to_marc({ data => $record->as_usmarc() });
-my $processed_record = MARC::Record->new_from_usmarc($processed_record_marc);
-
+my $processed_record = $plugin_process_record->($record, "New incoming record was successfully processed by plugin");
 my $matched_biblionumber = $processed_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
 is($matched_biblionumber, undef, "New incoming record processed by plugin does not match any existing Koha record");
 
 @fields = $processed_record->field('035');
-is(@fields, 2, "There should be two 035 fields in total");
+is(@fields, 2, "There is two 035 fields in total");
 is(scalar( grep { $_->subfield('a') eq '(035TEST)123' } @fields ), 1, "Duplicate 035 field have been removed based on 035a match");
 # TODO: also check of deleted from 001, 003, do we even delete??
 is(scalar( grep { $_->subfield('a') eq '(003TEST)1234' } @fields ), 1, "Incoming control number (001 + 003) have been moved to 035a");
@@ -196,11 +198,7 @@ my $incoming_record_with_item = $record->clone();
 $incoming_record_with_item->append_fields(@fields);
 
 # Process record again, this time we should have a matching record in Koha
-$processed_record_marc = $plugin->to_marc({ data => $incoming_record_with_item->as_usmarc() });
-# TODO: Add same test above
-ok($processed_record_marc, "Incoming record processed by plugin was successfully processed");
-
-$processed_record = MARC::Record->new_from_usmarc($processed_record_marc);
+$processed_record = $plugin_process_record->($incoming_record_with_item, "Incoming record processed by plugin was successfully processed");
 $matched_biblionumber = $processed_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
 ok($matched_biblionumber, "Incoming record processed by plugin has a matching Koha record");
 
@@ -262,12 +260,15 @@ my $incoming_record_with_item_with_existing_barcode = $record->clone();
 $incoming_record_with_item_with_existing_barcode->append_fields(@fields);
 # Process record again, item should be discarded (since barcode exists)
 # TODO: Should have helper sub for this
-$processed_record_marc = $plugin->to_marc({
-        data => $incoming_record_with_item_with_existing_barcode->as_usmarc()
-    }
+$processed_record = $plugin_process_record->(
+    $incoming_record_with_item_with_existing_barcode,
+    "Incoming record with item with existing barcode was successfully processed"
 );
-$processed_record = MARC::Record->new_from_usmarc($processed_record_marc);
-is($processed_record->field($koha_items_tag), undef, "Incoming record containing an item with same barcode as existing Koha item has no items after processed by plugin");
+is(
+    $processed_record->field($koha_items_tag),
+    undef,
+    "Incoming record containing an item with same barcode as existing Koha item has no items after processed by plugin"
+);
 
 my $incoming_record_with_item_with_existing_location = $record->clone();
 @fields = (
@@ -285,28 +286,146 @@ my $incoming_record_with_item_with_existing_location = $record->clone();
 $incoming_record_with_item_with_existing_location->append_fields(@fields);
 # Process record again, item should be discarded
 # (since an existing koha item on matching record with same location exists)
-$processed_record_marc = $plugin->to_marc({
-        data => $incoming_record_with_item_with_existing_location->as_usmarc()
-    }
+$processed_record = $plugin_process_record->(
+    $incoming_record_with_item_with_existing_location,
+    "Incoming record with item with existing location was successfully processed"
 );
-$processed_record = MARC::Record->new_from_usmarc($processed_record_marc);
+
+
 is($processed_record->field($koha_items_tag), undef, "Incoming record containing an item with same location as existing Koha item on matching record has no items after processed by plugin");
 
 ($success) = DelItem({ itemnumber => $itemnumber, biblionumber => $matched_biblionumber });
 ok($success, "Item on matched Koha biblio successfully deleted");
 
-# TODO: test again that no item with same barcode can be found!! Just to make sure has been deleted
+# Test if item was properly deleted by processing record with item with same barcode and location as before, this time it should be recognized as a new item
+my $incoming_record_with_item_with_existing_location_and_barcode = $record->clone();
+@fields = (
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, 'X',
+        LIBRIS_ITEM_TYPE, 'X',
+        LIBRIS_ITEM_BARCODE , '123',
+        LIBRIS_ITEM_CALLNUMBER, 'X',
+        LIBRIS_ITEM_NOT_FOR_LOAN, 'X',
+        LIBRIS_ITEM_LOCATION, "000$location",
+        LIBRIS_ITEM_NOTE, '', # Perhaps omit this since should not be set at all
+    ),
+);
+$incoming_record_with_item_with_existing_location_and_barcode->append_fields(@fields);
+$processed_record = $plugin_process_record->(
+    $incoming_record_with_item_with_existing_location_and_barcode,
+    "Incoming record with item with same barcode and locaiton as item that was deleted successfully processed by plugin"
+);
+@koha_item_fields = $processed_record->field($koha_items_tag);
+is(
+    @koha_item_fields,
+    1,
+    "Incoming record with item with same barcode and location as item that was deleted will create new Koha item"
+);
 
 # Process record again, item should be discarded (since a libris item with identical
 # properties exists in matched Koha record).
 # Note that we have deleted the Koha item to make sure that subfield mathing with
 # matching libris item is the only way item could be discarded.
-$processed_record_marc = $plugin->to_marc({
-        data => $incoming_record_with_item->as_usmarc()
-    }
+$processed_record = $plugin_process_record->(
+    $incoming_record_with_item,
+    "Incoming record containing an item with matching properties to existing Koha record libris item field was successfully processed"
 );
-$processed_record = MARC::Record->new_from_usmarc($processed_record_marc);
-is($processed_record->field($koha_items_tag), undef, "Incoming record containing an item with matching properties to existing Koha record libris item field has no items after processed by plugin");
+is(
+    $processed_record->field($koha_items_tag),
+    undef,
+    "Incoming record containing an item with matching properties to existing Koha record libris item field has no items after processed by plugin"
+);
+
+# Append two more unique records just to make sure that multiple items are processed correctly
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, '1',
+        LIBRIS_ITEM_TYPE, 'test',
+        LIBRIS_ITEM_BARCODE , '123',
+        LIBRIS_ITEM_CALLNUMBER, 'test callnumber',
+        LIBRIS_ITEM_NOT_FOR_LOAN, '0',
+        LIBRIS_ITEM_LOCATION, "000$location",
+        LIBRIS_ITEM_NOTE, '', # Perhaps omit this since should not be set at all
+    ),
+
+my $incoming_record_with_duplicate_items = $incoming_record_with_item->clone();
+@fields = (
+    # New uniqe item
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, '1',
+        LIBRIS_ITEM_TYPE, 'test',
+        LIBRIS_ITEM_BARCODE , '1234',
+        LIBRIS_ITEM_CALLNUMBER, 'test callnumber 2',
+        LIBRIS_ITEM_NOT_FOR_LOAN, '1',
+        LIBRIS_ITEM_LOCATION, "${library_branchcode}4567",
+    ),
+    # Add two items with same barcode to test deduplication
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, '1',
+        LIBRIS_ITEM_TYPE, 'test',
+        LIBRIS_ITEM_BARCODE , '12345',
+        LIBRIS_ITEM_CALLNUMBER, 'test callnumber 3',
+        LIBRIS_ITEM_NOT_FOR_LOAN, '1',
+        LIBRIS_ITEM_LOCATION, "${library_branchcode}5678",
+    ),
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, '1',
+        LIBRIS_ITEM_TYPE, 'test',
+        LIBRIS_ITEM_BARCODE , '12345',
+        LIBRIS_ITEM_CALLNUMBER, 'test callnumber 4',
+        LIBRIS_ITEM_NOT_FOR_LOAN, '1',
+        LIBRIS_ITEM_LOCATION, "${library_branchcode}6789",
+    ),
+    # Add two items with same location to test deduplication
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, '1',
+        LIBRIS_ITEM_TYPE, 'test',
+        LIBRIS_ITEM_BARCODE , '123456',
+        LIBRIS_ITEM_CALLNUMBER, 'test callnumber 5',
+        LIBRIS_ITEM_NOT_FOR_LOAN, '1',
+        LIBRIS_ITEM_LOCATION, "${library_branchcode}7890",
+    ),
+    MARC::Field->new(
+        $libris_item_tag, ' ', ' ',
+        LIBRIS_ITEM_COPYNUMBER, '1',
+        LIBRIS_ITEM_TYPE, 'test',
+        LIBRIS_ITEM_BARCODE , '1234567',
+        LIBRIS_ITEM_CALLNUMBER, 'test callnumber 6',
+        LIBRIS_ITEM_NOT_FOR_LOAN, '1',
+        LIBRIS_ITEM_LOCATION, "${library_branchcode}7890",
+    ),
+);
+$incoming_record_with_duplicate_items->append_fields(@fields);
+$processed_record = $plugin_process_record->(
+    $incoming_record_with_duplicate_items,
+    "Incoming record with duplicate items successfully processed by plugin"
+);
+@koha_item_fields = $processed_record->field($koha_items_tag);
+is(
+    @koha_item_fields,
+    3,
+    "The correct number of koha items was created for incoming libris items"
+);
+is(
+    scalar( grep { $_->subfield('p') eq '1234' } @koha_item_fields ),
+    1,
+    "One koha item created for new unique incoming libris item"
+);
+is(
+    scalar( grep { $_->subfield('p') eq '12345' } @koha_item_fields ),
+    1,
+    "Incoming items with identical barcodes has been deduplicated"
+);
+is(
+    scalar( grep { $_->subfield('c') eq "${library_branchcode}7890" } @koha_item_fields ),
+    1,
+    "Incoming items with identical locations has been deduplicated"
+);
 
 # Need to clean up Zebra/Elastic explicitly since not part of transaction
 ModZebra($biblionumber, "recordDelete", "biblioserver");
