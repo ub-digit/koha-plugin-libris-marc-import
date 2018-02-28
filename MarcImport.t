@@ -16,7 +16,7 @@ use Koha::AuthorisedValue;
 #use Test::MockModule;
 use Test::MockObject::Extends;
 use t::lib::Mocks;
-use Test::More tests => 47;
+use Test::More tests => 51;
 use C4::Context;
 use Koha::Plugins;
 use Koha::Database;
@@ -38,6 +38,8 @@ $plugin->mock('retrieve_data', sub {
             normalize_utf8_normalization_form => 'D', #TODO: Test for this??
             deduplicate_fields_tagspecs => "035a\n949D\n9496",
             deduplicate_fields_enable => 1,
+            deduplicate_records_tagspecs => "001\n003\n035a8",
+            deduplicate_records_enable => 1,
             move_incoming_control_number_enable => 1,
             record_matching_enable => 1,
             matchpoints => 'system-control-number,035a',
@@ -54,10 +56,15 @@ my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.
 my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
 
 my $plugin_process_record = sub {
-    my ($record, $test_message) = @_;
-    my $processed_record_marc = $plugin->to_marc({ data => $record->as_usmarc() });
-    ok($processed_record_marc, $test_message);
-    return MARC::Record->new_from_usmarc($processed_record_marc);
+    my ($records, $test_message) = @_;
+    $records = [$records] if (ref($records) ne 'ARRAY');
+    # TODO: UTF-8 encode??
+    my $processed_records_marc = $plugin->to_marc({
+        data => join('', map { $_->as_usmarc() } @{$records} )
+    });
+    ok($processed_records_marc, $test_message);
+    # TODO: Quick and dirty, since MARCH::Batch interface is frustrating to work with
+    return map { MARC::Record->new_from_usmarc($_) } (grep { $_ } split("\x1D", $processed_records_marc));
 };
 
 my $schema = Koha::Database->new->schema;
@@ -150,7 +157,8 @@ my @fields = (
     ),
 );
 $record->append_fields(@fields);
-my $processed_record = $plugin_process_record->($record, "New incoming record was successfully processed by plugin");
+
+my ($processed_record) = $plugin_process_record->($record, "New incoming record was successfully processed by plugin");
 my $matched_biblionumber = $processed_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
 is($matched_biblionumber, undef, "New incoming record processed by plugin does not match any existing Koha record");
 
@@ -198,7 +206,7 @@ my $incoming_record_with_item = $record->clone();
 $incoming_record_with_item->append_fields(@fields);
 
 # Process record again, this time we should have a matching record in Koha
-$processed_record = $plugin_process_record->($incoming_record_with_item, "Incoming record processed by plugin was successfully processed");
+($processed_record) = $plugin_process_record->($incoming_record_with_item, "Incoming record processed by plugin was successfully processed");
 $matched_biblionumber = $processed_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
 ok($matched_biblionumber, "Incoming record processed by plugin has a matching Koha record");
 
@@ -260,7 +268,7 @@ my $incoming_record_with_item_with_existing_barcode = $record->clone();
 $incoming_record_with_item_with_existing_barcode->append_fields(@fields);
 # Process record again, item should be discarded (since barcode exists)
 # TODO: Should have helper sub for this
-$processed_record = $plugin_process_record->(
+($processed_record) = $plugin_process_record->(
     $incoming_record_with_item_with_existing_barcode,
     "Incoming record with item with existing barcode was successfully processed"
 );
@@ -286,7 +294,7 @@ my $incoming_record_with_item_with_existing_location = $record->clone();
 $incoming_record_with_item_with_existing_location->append_fields(@fields);
 # Process record again, item should be discarded
 # (since an existing koha item on matching record with same location exists)
-$processed_record = $plugin_process_record->(
+($processed_record) = $plugin_process_record->(
     $incoming_record_with_item_with_existing_location,
     "Incoming record with item with existing location was successfully processed"
 );
@@ -312,7 +320,7 @@ my $incoming_record_with_item_with_existing_location_and_barcode = $record->clon
     ),
 );
 $incoming_record_with_item_with_existing_location_and_barcode->append_fields(@fields);
-$processed_record = $plugin_process_record->(
+($processed_record) = $plugin_process_record->(
     $incoming_record_with_item_with_existing_location_and_barcode,
     "Incoming record with item with same barcode and locaiton as item that was deleted successfully processed by plugin"
 );
@@ -327,7 +335,7 @@ is(
 # properties exists in matched Koha record).
 # Note that we have deleted the Koha item to make sure that subfield mathing with
 # matching libris item is the only way item could be discarded.
-$processed_record = $plugin_process_record->(
+($processed_record) = $plugin_process_record->(
     $incoming_record_with_item,
     "Incoming record containing an item with matching properties to existing Koha record libris item field was successfully processed"
 );
@@ -401,7 +409,7 @@ my $incoming_record_with_duplicate_items = $incoming_record_with_item->clone();
     ),
 );
 $incoming_record_with_duplicate_items->append_fields(@fields);
-$processed_record = $plugin_process_record->(
+($processed_record) = $plugin_process_record->(
     $incoming_record_with_duplicate_items,
     "Incoming record with duplicate items successfully processed by plugin"
 );
@@ -426,6 +434,33 @@ is(
     1,
     "Incoming items with identical locations has been deduplicated"
 );
+
+my $record_a = $record->clone();
+my $record_b = $record->clone();
+
+# Set subfield "8" to make record_a unique
+foreach my $field ($record_a->field('035')) {
+    $field->add_subfields( '8' => '123' );
+}
+my @processed_records = $plugin_process_record->(
+    [$record_a, $record_b],
+    "Non-duplicate records successfully processed by plugin"
+);
+
+is(@processed_records, 2, "No record has been deduplicated");
+
+# Set subfield "8" to same value for record_b,
+# record_a should now be candidate for deduplication
+foreach my $field ($record_b->field('035')) {
+    $field->add_subfields( '8' => '123' );
+}
+@processed_records = $plugin_process_record->(
+    [$record_a, $record_b],
+    "Duplicate records successfully processed by plugin"
+);
+is(@processed_records, 1, "One record has been deduplicated");
+
+# TODO: Should also check that record_a was removed, and not record_b!
 
 # Need to clean up Zebra/Elastic explicitly since not part of transaction
 ModZebra($biblionumber, "recordDelete", "biblioserver");

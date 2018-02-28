@@ -99,24 +99,11 @@ sub to_marc {
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
     #my %valid_item_types = %{ ItemTypes() };
 
+    my $config = $self->get_config();
 
-    # @FIXME: our?
-    my $default_incoming_record_items_tag = '949';
-    my $default_normalize_utf8_normalization_form = 'C';
-
-    my $config = {
-        framework => $self->retrieve_data('framework') // '',
-        process_incoming_record_items_enable  => $self->retrieve_data('process_incoming_record_items_enable') || '0',
-        incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
-        normalize_utf8_enable => $self->retrieve_data('normalize_utf8_enable') || '0',
-        normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
-        deduplicate_fields_tagspecs => [split(/[\r\n]+/, $self->retrieve_data('deduplicate_fields_tagspecs') // '')], # '035a' # @FIXME tagspec/fieldspec pick one
-        deduplicate_fields_enable => $self->retrieve_data('deduplicate_fields_enable') || '0',
-        move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
-        record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
-        matchpoints => [split(/[\r\n]+/, $self->retrieve_data('matchpoints') // '')], # 'system-control-number,035a'
-        protect_authority_linkage_enable => $self->retrieve_data('protect_authority_linkage_enable') || '0',
-    };
+    foreach my $key ('deduplicate_fields_tagspecs', 'deduplicate_records_tagspecs', 'matchpoints') {
+        $config->{$key} = [split(/[\r\n]+/, $config->{$key})];
+    }
 
     #TODO: setting
     my $authorities = 0;
@@ -135,8 +122,10 @@ sub to_marc {
     my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $config->{framework});
     my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $config->{framework});
 
+    # Decode all records and catch possible decoding errors
+    my @records;
     my $i = -1;
-    RECORD: while(1) {
+    while(1) {
         $i++;
         my $record;
         # Infinite loop and eval so can catch marc decode/parsing errors
@@ -153,13 +142,68 @@ sub to_marc {
                 my @records_raw = split("\x1D", $args->{data});
                 $record_data = $records_raw[$i];
             }
-            $self->_stashFailedMarcRecord($record_data, "invalid_record", "Failed to parse MARC record: $@");
+            if ($config->{'stash_failed_records_enable'}) {
+                $self->_stashFailedMarcRecord(
+                    $record_data,
+                    "invalid_record",
+                    "Failed to parse MARC record: $@",
+                    $config->{'stash_failed_records_directory'}
+                );
+            }
             next;
         }
         elsif(!$record) {
             last;
         }
+        push @records, $record;
+    }
 
+    if ($config->{deduplicate_records_enable} && $config->{deduplicate_records_tagspecs}) {
+        my $hashed_fields_key;
+        my %deduplicated_records;
+        my @deduplicated_records_keys; # To preserve order
+        my @missing_fields_records; #TODO: Hmm??
+        my %hash_fields;
+        my @keys;
+
+        foreach my $field_spec (@{$config->{deduplicate_records_tagspecs}}) {
+            my ($tag, $subfields) = $field_spec =~ /([0-9]{3})([a-zA-Z0-9]*)/;
+            $hash_fields{$tag} = $subfields ? { map { $_ => undef } split(//, $subfields) } : undef;
+        }
+        foreach my $record (@records) {
+            @keys = ();
+            foreach my $field (grep { exists $hash_fields{$_->tag()} } $record->fields()) {
+                my $subfields = $hash_fields{$field->tag()};
+                # TODO: Rename sub to just hash_field or similiar
+                my $key = hash_field_by_subfields($field, $subfields);
+                if ($key) {
+                    push @keys, $key;
+                }
+            }
+            # Join on field terminator and sort make sure order does not matter
+            $hashed_fields_key = join("\x1E", sort @keys);
+            if ($hashed_fields_key) {
+                if (exists $deduplicated_records{$hashed_fields_key}) {
+                    # Remove key
+                    @deduplicated_records_keys = grep { $_ ne $hashed_fields_key } @deduplicated_records_keys;
+                }
+                $deduplicated_records{$hashed_fields_key} = $record;
+                push @deduplicated_records_keys, $hashed_fields_key;
+            }
+            else {
+                push @missing_fields_records, $record
+            }
+        }
+        @records = map { $deduplicated_records{$_} } @deduplicated_records_keys;
+        # TODO: Right now these end up at the bottom
+        # to preserve order could generege guid hash key
+        # instead
+        if (@missing_fields_records) {
+            push @records, @missing_fields_records;
+        }
+    }
+
+    foreach my $record (@records) {
         my $matched_record_id = undef; # Can remove = undef?
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
         if (defined($koha_local_record_id) && GetBiblio($koha_local_record_id)) {
@@ -209,7 +253,15 @@ sub to_marc {
                         # @TODO: Should perhaps add both records in 999c instead and let downstream take care of duplicates
                         my $error = "More than one match for $query";
                         warn $error;
-                        $self->_stashFailedMarcRecord($record->as_usmarc(), "multiple_matches", $error);
+
+                        if ($config->{'stash_failed_records_enable'}) {
+                            $self->_stashFailedMarcRecord(
+                                $record->as_usmarc(),
+                                "multiple_matches",
+                                $error,
+                                $config->{'stash_failed_records_directory'}
+                            );
+                        }
                     }
                     else {
                         # @TODO: Really warn here?
@@ -252,13 +304,14 @@ sub to_marc {
             }
             ## Dedup incoming record field
             if ($config->{deduplicate_fields_enable}) {
+                # TODO: $field_spec/$tagspecs, pick one!
                 foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
-                    my ($tag_spec, $subfield) = $field_spec =~ /([0-9.]{3})([a-zA-Z0-9])/;
+                    my ($tag_spec, $subfields) = $field_spec =~ /([0-9.]{3})([a-zA-Z0-9]*)/;
                     if (!$tag_spec) {
                         die "Empty or invalid tag-spec: \"$tag_spec\"";
                     }
                     foreach my $tag (marc_record_tag_spec_expand_tags($record, $tag_spec)) {
-                        in_place_dedup_record_field($record, $tag, $subfield);
+                        in_place_dedup_record_field($record, $tag, $subfields ? [split //, $subfields] : undef);
                     }
                 }
             }
@@ -565,9 +618,8 @@ sub GetKohaItemsFromMarcRecord {
 }
 
 sub _stashFailedMarcRecord {
-    my ($self, $record_data, $error_type, $error_msg) = @_;
-    my $directory = $self->retrieve_data('stash_failed_records_directory');
-    if ($self->retrieve_data('stash_failed_records_enable') && length($directory)) {
+    my ($self, $record_data, $error_type, $error_msg, $directory) = @_;
+    if (length($directory)) {
         # Create error type directory if not exists
         my $output_dir = "$directory/$error_type";
         # TODO: error if failed to create
@@ -592,39 +644,58 @@ sub _stashFailedMarcRecord {
         print $fh $error_msg;
         close($fh);
     }
+    else {
+        # warn?
+    }
+}
+
+sub get_config_defaults {
+    my $default_normalize_utf8_normalization_form = 'C';
+    return {
+        'framework' => '',
+        'process_incoming_record_items_enable' => '0',
+        'incoming_record_items_tag' => '',
+        'normalize_utf8_enable' => '0',
+        'normalize_utf8_normalization_form' => $default_normalize_utf8_normalization_form,
+        'deduplicate_fields_enable' => '0',
+        'deduplicate_fields_tagspecs' => '',
+        'deduplicate_records_enable' => '0',
+        'deduplicate_records_tagspecs' => '',
+        'move_incoming_control_number_enable' => '0',
+        'record_matching_enable' => '0',
+        'matchpoints' => '',
+        'stash_failed_records_enable' => '0',
+        'stash_failed_records_directory' => '',
+        'protect_authority_linkage_enable' => '0',
+    };
+}
+
+sub get_config {
+    my ($self) = @_;
+    #TODO: make package global, our?
+    my $defaults = $self->get_config_defaults();
+    my $config = {};
+    foreach my $key (keys %{$defaults}) {
+        $config->{$key} = $self->retrieve_data($key) // $defaults->{$key};
+    }
+    return $config;
 }
 
 sub configure {
-    my ( $self, $args ) = @_;
+    my ($self, $args) = @_;
     my $cgi = $self->{'cgi'};
 
     ## Grab the values we already have for our settings, if any exist
     my $framework_options = Koha::BiblioFrameworks->search({}, { order_by => ['frameworktext'] });
     my $normalize_utf8_normalization_form_options = ['D', 'C', 'KD', 'KC'];
 
-    #TODO: make package global, our?
-    my $default_incoming_record_items_tag = '949';
-    my $default_normalize_utf8_normalization_form = 'C';
-
     unless ($cgi->param('save')) {
         my $template = $self->get_template({ file => 'configure.tt' });
         ## Grab the values we already have for our settings, if any exist
         $template->param(
             framework_options => $framework_options,
-            framework => $self->retrieve_data('framework') // '',
-            process_incoming_record_items_enable  => $self->retrieve_data('process_incoming_record_items_enable') || '0',
-            incoming_record_items_tag  => $self->retrieve_data('incoming_record_items_tag') // $default_incoming_record_items_tag,
-            normalize_utf8_enable => $self->retrieve_data('normalize_utf8_enable') || '0',
             normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
-            normalize_utf8_normalization_form => $self->retrieve_data('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
-            deduplicate_fields_tagspecs => $self->retrieve_data('deduplicate_fields_tagspecs') // '', # '035a'
-            deduplicate_fields_enable => $self->retrieve_data('deduplicate_fields_enable') || '0',
-            move_incoming_control_number_enable => $self->retrieve_data('move_incoming_control_number_enable') || '0',
-            record_matching_enable => $self->retrieve_data('record_matching_enable') || '0',
-            matchpoints => $self->retrieve_data('matchpoints') // '', # 'system-control-number,035a'
-            stash_failed_records_enable => $self->retrieve_data('stash_failed_records_enable') || '0',
-            stash_failed_records_directory => $self->retrieve_data('stash_failed_records_directory') // '',
-            protect_authority_linkage_enable => $self->retrieve_data('protect_authority_linkage_enable') || '0'
+            %{$self->get_config}
         );
         print $cgi->header();
         print $template->output();
@@ -637,21 +708,13 @@ sub configure {
             }
         }
         my $config = {
-            framework => $cgi->param('framework') // '',
-            process_incoming_record_items_enable  => $cgi->param('process_incoming_record_items_enable') || '0',
-            incoming_record_items_tag  => $cgi->param('incoming_record_items_tag') // '',
-            normalize_utf8_enable => $cgi->param('normalize_utf8_enable') || '0',
-            normalize_utf8_normalization_form => $cgi->param('normalize_utf8_normalization_form') // $default_normalize_utf8_normalization_form,
-            deduplicate_fields_enable => $cgi->param('deduplicate_fields_enable') || '0',
-            deduplicate_fields_tagspecs => $cgi->param('deduplicate_fields_tagspecs') // '',
-            move_incoming_control_number_enable => $cgi->param('move_incoming_control_number_enable') || '0',
-            record_matching_enable => $cgi->param('record_matching_enable') || '0',
-            matchpoints => $cgi->param('matchpoints') // '',
-            stash_failed_records_enable => $cgi->param('stash_failed_records_enable') || '0',
-            stash_failed_records_directory => $cgi->param('stash_failed_records_directory') // '',
-            protect_authority_linkage_enable => $cgi->param('protect_authority_linkage_enable') || '0',
             last_configured_by => C4::Context->userenv->{'number'}
         };
+        my $defaults = $self->get_config_defaults();
+        foreach my $key (keys %{$defaults}) {
+            $config->{$key} = $cgi->param($key) // $defaults->{$key};
+        }
+
         #TODO: regexp validation for non-options settings
         # Seems reset is not necessary?
         $framework_options->reset;
@@ -668,8 +731,10 @@ sub configure {
         validate_option($config->{move_incoming_control_number_enable}, $checkbox_options, 'Move incoming control number');
         validate_option($config->{process_incoming_record_items_enable}, $checkbox_options, 'Process incoming items');
         validate_option($config->{deduplicate_fields_enable}, $checkbox_options, 'Enable deduplicate fields');
+        validate_option($config->{deduplicate_records_enable}, $checkbox_options, 'Enable deduplicate records');
         validate_option($config->{stash_failed_records_enable}, $checkbox_options, 'Stash field records');
         validate_option($config->{protect_authority_linkage_enable}, $checkbox_options, 'Protect autority linkage');
+        # TODO: why not validate here instead using @valid_utf8_normalization_forms?
 
         # Save
         $self->store_data($config);
@@ -753,30 +818,54 @@ sub marc_record_tag_spec_expand_tags {
     return keys %tags;
 }
 
-# @FIXME? IMPORTANT: This function will delete all fields where the dedup-subfield is unset,
-# but only if another duplicate is found. This is perhaps not very well-behaved, and should
-# be fixed
+sub hash_field_by_subfields {
+    my ($field, $subfields_hash) = @_;
+    my $hash_data;
+    if ($field->is_control_field()) {
+        $hash_data = $field->data();
+    }
+    else {
+        if (defined $subfields_hash && ref($subfields_hash) eq 'ARRAY') {
+            $subfields_hash = { map { $_ => undef } @{$subfields_hash} };
+        }
+        $hash_data = join("\x1E", (sort
+                (map { join("\x1F", @{$_}) }
+                    ($subfields_hash ? grep { exists $subfields_hash->{$_->[0]} } $field->subfields() : $field->subfields()))));
+    }
+    return $hash_data ? $field->tag() . ":" . $hash_data : undef;
+}
+
 sub in_place_dedup_record_field {
-    my($record, $tag, $subfield) = @_;
-    my %deduplicate_fields_tagspecs;
+    my ($record, $tag, $subfields) = @_;
+    my %deduplicated_fields;
+    my @undef_subfields_fields;
     my $key;
     my @fields = $record->field($tag);
+    my $subfields_hash = $subfields ? { map { $_ => undef } @{$subfields} } : undef;
 
     my $has_dups = 0;
     foreach my $field (@fields) {
-        $key = $subfield ? $field->subfield($subfield) : $field->data();
-        if ($key) {
-            if (exists $deduplicate_fields_tagspecs{$key}) {
+        $key = hash_field_by_subfields($field, $subfields_hash);
+        if (defined $key) {
+            if (exists $deduplicated_fields{$key}) {
+                # Don't add and set marker we need to modify record
                 $has_dups = 1;
             }
             else {
-                $deduplicate_fields_tagspecs{$key} = $field;
+                $deduplicated_fields{$key} = $field;
             }
+        }
+        else {
+            # Keep all fields with undefined subfields
+            push @undef_subfields_fields, $field;
         }
     }
     if ($has_dups) {
         $record->delete_fields(@fields);
-        $record->insert_fields_ordered(values %deduplicate_fields_tagspecs);
+        $record->insert_fields_ordered(values %deduplicated_fields);
+        if (@undef_subfields_fields) {
+            $record->insert_fields_ordered(@undef_subfields_fields);
+        }
     }
 }
 

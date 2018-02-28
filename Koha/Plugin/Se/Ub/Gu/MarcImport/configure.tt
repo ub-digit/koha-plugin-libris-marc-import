@@ -81,6 +81,23 @@
         </ol>
         </fieldset>
         <fieldset class="rows">
+        <legend>Incoming records deduplicate</legend>
+        <ol>
+        <li>
+            <label for="deduplicate_records_enable">Enable:</label>
+            [% IF deduplicate_records_enable %]
+                <input id="deduplicate_records_enable" type="checkbox" name="deduplicate_records_enable" value="1" checked>
+            [% ELSE %]
+                <input id="deduplicate_records_enable" type="checkbox" name="deduplicate_records_enable" value="1">
+            [% END %]
+        </li>
+        <li>
+            <label for="deduplicate_records_tagspecs">Tagspecs (separated by newline):</label>
+            <textarea id="deduplicate_records_tagspecs" name="deduplicate_records_tagspecs" cols="30" rows="3">[% deduplicate_records_tagspecs %]</textarea>
+        </li>
+        </ol>
+        </fieldset>
+        <fieldset class="rows">
         <legend>Incoming record deduplicate fields</legend>
         <ol>
         <li>
