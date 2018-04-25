@@ -203,7 +203,7 @@ sub to_marc {
         }
     }
 
-    foreach my $record (@records) {
+    RECORD: foreach my $record (@records) {
         my $matched_record_id = undef; # Can remove = undef?
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
         if (defined($koha_local_record_id) && GetBiblio($koha_local_record_id)) {
@@ -262,6 +262,7 @@ sub to_marc {
                                 $config->{'stash_failed_records_directory'}
                             );
                         }
+                        next RECORD;
                     }
                     else {
                         # @TODO: Really warn here?
