@@ -33,6 +33,7 @@ use Koha::Exceptions;
 use Digest::MD5 qw(md5_hex);
 use POSIX qw(strftime);
 use File::Path qw(make_path);
+use UUID;
 
 ## Here we set our plugin version
 our $VERSION = 0.01;
@@ -85,6 +86,51 @@ sub to_marc {
     my @marc_records = ();
     my $marc_record = undef;
     my $marc_type = C4::Context->preference('marcflavour');
+    my $config = $self->get_config();
+
+    if ($config->{process_marc_command_enable} && $config->{process_marc_command_command}) {
+        {
+            my $uuid;
+            my $uuid_string;
+            UUID::generate($uuid);
+            UUID::unparse($uuid, $uuid_string);
+
+            # TODO: Base dir as config option?
+            my $marc_file = '/tmp/MarcImport_process_marc_command_marc_file-' . $uuid_string;
+            my $command = $config->{process_marc_command_command};
+            my $replacements = $command =~ s/\{marc_file\}/$marc_file/g;
+            if (!$replacements) {
+                if ($config->{'stash_failed_records_enable'}) {
+                    $self->_stashFailedMarcRecord(
+                        $args->{data},
+                        "process_marc_command_missing_marc_file_token",
+                        "Missing marc file token, command must contain {marc_file} which will be replaced with input marc file path",
+                        $config->{'stash_failed_records_directory'}
+                    );
+                }
+                return;
+            }
+
+            open(FILE, ">", $marc_file);
+            print FILE $args->{data};
+            close(FILE);
+
+            my $marc = `$command`;
+
+            if ($?) {
+                if ($config->{'stash_failed_records_enable'}) {
+                    $self->_stashFailedMarcRecord(
+                        $args->{data},
+                        "process_marc_command_fail",
+                        "Command returned non zero exit status",
+                        $config->{'stash_failed_records_directory'}
+                    );
+                }
+                return;
+            }
+            $args->{data} = $marc;
+        }
+    }
 
     my $marc_batch;
     my $fh;
@@ -99,7 +145,6 @@ sub to_marc {
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
     #my %valid_item_types = %{ ItemTypes() };
 
-    my $config = $self->get_config();
 
     foreach my $key ('deduplicate_fields_tagspecs', 'deduplicate_records_tagspecs', 'matchpoints') {
         $config->{$key} = [split(/[\r\n]+/, $config->{$key})];
@@ -669,6 +714,8 @@ sub get_config_defaults {
         'stash_failed_records_enable' => '0',
         'stash_failed_records_directory' => '',
         'protect_authority_linkage_enable' => '0',
+        'process_marc_command_enable' => '0',
+        'process_marc_command_command' => '',
     };
 }
 
@@ -736,6 +783,7 @@ sub configure {
         validate_option($config->{deduplicate_records_enable}, $checkbox_options, 'Enable deduplicate records');
         validate_option($config->{stash_failed_records_enable}, $checkbox_options, 'Stash field records');
         validate_option($config->{protect_authority_linkage_enable}, $checkbox_options, 'Protect autority linkage');
+        validate_option($config->{process_marc_command_enable}, $checkbox_options, 'Process marc command');
         # TODO: why not validate here instead using @valid_utf8_normalization_forms?
 
         # Save

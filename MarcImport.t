@@ -11,7 +11,7 @@ use File::Spec;
 #use Test::MockModule;
 use Test::MockObject::Extends;
 use t::lib::Mocks;
-use Test::More tests => 51;
+use Test::More tests => 54;
 use Cwd qw(getcwd);
 
 use C4::Biblio;
@@ -30,23 +30,25 @@ use Koha::Plugin::Se::Ub::Gu::MarcImport;
 
 my $plugin = Koha::Plugin::Se::Ub::Gu::MarcImport->new({});
 $plugin = Test::MockObject::Extends->new($plugin);
+
+my $conf = {
+    framework => '',
+    process_incoming_record_items_enable  => 1,
+    incoming_record_items_tag  => '949',
+    normalize_utf8_enable => 1,
+    normalize_utf8_normalization_form => 'D', #TODO: Test for this??
+    deduplicate_fields_tagspecs => "035a\n949D\n9496",
+    deduplicate_fields_enable => 1,
+    deduplicate_records_tagspecs => "001\n003\n035a8",
+    deduplicate_records_enable => 1,
+    move_incoming_control_number_enable => 1,
+    record_matching_enable => 1,
+    matchpoints => 'system-control-number,035a',
+    protect_authority_linkage_enable => 1,
+};
+
 $plugin->mock('retrieve_data', sub {
         my ($self, $key) = @_;
-        my $conf = {
-            framework => '',
-            process_incoming_record_items_enable  => 1,
-            incoming_record_items_tag  => '949',
-            normalize_utf8_enable => 1,
-            normalize_utf8_normalization_form => 'D', #TODO: Test for this??
-            deduplicate_fields_tagspecs => "035a\n949D\n9496",
-            deduplicate_fields_enable => 1,
-            deduplicate_records_tagspecs => "001\n003\n035a8",
-            deduplicate_records_enable => 1,
-            move_incoming_control_number_enable => 1,
-            record_matching_enable => 1,
-            matchpoints => 'system-control-number,035a',
-            protect_authority_linkage_enable => 1,
-        };
         return $conf->{$key};
     }
 );
@@ -57,10 +59,9 @@ my $libris_item_tag = $plugin->retrieve_data('incoming_record_items_tag');
 my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $frameworkcode);
 my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
 
-my $plugin_process_record = sub {
+my $plugin_process_records = sub {
     my ($records, $test_message) = @_;
     $records = [$records] if (ref($records) ne 'ARRAY');
-    # TODO: UTF-8 encode??
     my $processed_records_marc = $plugin->to_marc({
         data => join('', map { encode('UTF-8', $_->as_usmarc()) } @{$records} )
     });
@@ -160,7 +161,7 @@ my @fields = (
 );
 $record->append_fields(@fields);
 
-my ($processed_record) = $plugin_process_record->($record, "New incoming record was successfully processed by plugin");
+my ($processed_record) = $plugin_process_records->($record, "New incoming record was successfully processed by plugin");
 my $matched_biblionumber = $processed_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
 is($matched_biblionumber, undef, "New incoming record processed by plugin does not match any existing Koha record");
 
@@ -208,7 +209,7 @@ my $incoming_record_with_item = $record->clone();
 $incoming_record_with_item->append_fields(@fields);
 
 # Process record again, this time we should have a matching record in Koha
-($processed_record) = $plugin_process_record->($incoming_record_with_item, "Incoming record processed by plugin was successfully processed");
+($processed_record) = $plugin_process_records->($incoming_record_with_item, "Incoming record processed by plugin was successfully processed");
 $matched_biblionumber = $processed_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
 ok($matched_biblionumber, "Incoming record processed by plugin has a matching Koha record");
 
@@ -270,7 +271,7 @@ my $incoming_record_with_item_with_existing_barcode = $record->clone();
 $incoming_record_with_item_with_existing_barcode->append_fields(@fields);
 # Process record again, item should be discarded (since barcode exists)
 # TODO: Should have helper sub for this
-($processed_record) = $plugin_process_record->(
+($processed_record) = $plugin_process_records->(
     $incoming_record_with_item_with_existing_barcode,
     "Incoming record with item with existing barcode was successfully processed"
 );
@@ -296,7 +297,7 @@ my $incoming_record_with_item_with_existing_location = $record->clone();
 $incoming_record_with_item_with_existing_location->append_fields(@fields);
 # Process record again, item should be discarded
 # (since an existing koha item on matching record with same location exists)
-($processed_record) = $plugin_process_record->(
+($processed_record) = $plugin_process_records->(
     $incoming_record_with_item_with_existing_location,
     "Incoming record with item with existing location was successfully processed"
 );
@@ -322,7 +323,7 @@ my $incoming_record_with_item_with_existing_location_and_barcode = $record->clon
     ),
 );
 $incoming_record_with_item_with_existing_location_and_barcode->append_fields(@fields);
-($processed_record) = $plugin_process_record->(
+($processed_record) = $plugin_process_records->(
     $incoming_record_with_item_with_existing_location_and_barcode,
     "Incoming record with item with same barcode and locaiton as item that was deleted successfully processed by plugin"
 );
@@ -337,7 +338,7 @@ is(
 # properties exists in matched Koha record).
 # Note that we have deleted the Koha item to make sure that subfield mathing with
 # matching libris item is the only way item could be discarded.
-($processed_record) = $plugin_process_record->(
+($processed_record) = $plugin_process_records->(
     $incoming_record_with_item,
     "Incoming record containing an item with matching properties to existing Koha record libris item field was successfully processed"
 );
@@ -411,7 +412,7 @@ my $incoming_record_with_duplicate_items = $incoming_record_with_item->clone();
     ),
 );
 $incoming_record_with_duplicate_items->append_fields(@fields);
-($processed_record) = $plugin_process_record->(
+($processed_record) = $plugin_process_records->(
     $incoming_record_with_duplicate_items,
     "Incoming record with duplicate items successfully processed by plugin"
 );
@@ -444,7 +445,7 @@ my $record_b = $record->clone();
 foreach my $field ($record_a->field('035')) {
     $field->add_subfields( '8' => '123' );
 }
-my @processed_records = $plugin_process_record->(
+my @processed_records = $plugin_process_records->(
     [$record_a, $record_b],
     "Non-duplicate records successfully processed by plugin"
 );
@@ -456,11 +457,30 @@ is(@processed_records, 2, "No record has been deduplicated");
 foreach my $field ($record_b->field('035')) {
     $field->add_subfields( '8' => '123' );
 }
-@processed_records = $plugin_process_record->(
+@processed_records = $plugin_process_records->(
     [$record_a, $record_b],
     "Duplicate records successfully processed by plugin"
 );
 is(@processed_records, 1, "One record has been deduplicated");
+
+$conf->{process_incoming_record_items_enable} = 0;
+$conf->{normalize_utf8_enable} = 0;
+$conf->{deduplicate_fields_enable} = 0;
+$conf->{deduplicate_records_enable} = 0;
+$conf->{move_incoming_control_number_enable} = 0;
+$conf->{record_matching_enable} = 0;
+$conf->{protect_authority_linkage_enable} = 0;
+$conf->{process_marc_command_enable} = 1;
+$conf->{process_marc_command_command} = 'touch /tmp/MarcImport_test && cat "{marc_file}" && rm "{marc_file}"';
+
+my $process_marc_command_record = $plugin->to_marc({
+    data => encode('UTF-8', $record_a->as_usmarc())
+});
+
+ok(-f '/tmp/MarcImport_test', "Process MARC command has run");
+unlink '/tmp/MarcImport_test';
+ok($process_marc_command_record, "Record processed by shell command successfully processed by plugin");
+ok(encode('UTF-8', $record_a->as_usmarc()) eq $process_marc_command_record, 'Record produced by shell command `cat {marc_file}` is identical to original incoming record');
 
 # TODO: Should also check that record_a was removed, and not record_b!
 
