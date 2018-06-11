@@ -631,6 +631,7 @@ sub _stashFailedMarcRecord {
         if (@$err) {
             die("Unable to create $output_dir");
         }
+        $record_data = encode('UTF-8', $record_data);
         my $record_hash = md5_hex($record_data);
         my $date = strftime "%d-%m-%Y", localtime;
         my $fh;

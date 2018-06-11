@@ -5,23 +5,25 @@ use Modern::Perl;
 use MARC::Field;
 use MARC::Record;
 use MARC::File::USMARC;
-use C4::Biblio;
-use C4::Items;
-
-use Koha::ItemType;
-use Koha::Library;
-#use Koha::AuthorisedValues;
-use Koha::AuthorisedValue;
+use Encode qw(encode);
+use File::Spec;
 
 #use Test::MockModule;
 use Test::MockObject::Extends;
 use t::lib::Mocks;
 use Test::More tests => 51;
+use Cwd qw(getcwd);
+
+use C4::Biblio;
+use C4::Items;
 use C4::Context;
+
+use Koha::ItemType;
+use Koha::Library;
+use Koha::AuthorisedValue;
 use Koha::Plugins;
 use Koha::Database;
-use Cwd qw(getcwd);
-use File::Spec;
+
 #my $plugin_path = File::Spec->catfile(getcwd, 'Koha', 'Plugin', 'Se', 'Ub', 'Gu');
 use lib 'Koha/Plugin/Se/Ub/Gu'; # Perhaps not needed after all?? Koha loads include path?
 use Koha::Plugin::Se::Ub::Gu::MarcImport;
@@ -60,7 +62,7 @@ my $plugin_process_record = sub {
     $records = [$records] if (ref($records) ne 'ARRAY');
     # TODO: UTF-8 encode??
     my $processed_records_marc = $plugin->to_marc({
-        data => join('', map { $_->as_usmarc() } @{$records} )
+        data => join('', map { encode('UTF-8', $_->as_usmarc()) } @{$records} )
     });
     ok($processed_records_marc, $test_message);
     # TODO: Quick and dirty, since MARCH::Batch interface is frustrating to work with
