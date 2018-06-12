@@ -738,18 +738,7 @@ sub configure {
     my $framework_options = Koha::BiblioFrameworks->search({}, { order_by => ['frameworktext'] });
     my $normalize_utf8_normalization_form_options = ['D', 'C', 'KD', 'KC'];
 
-    unless ($cgi->param('save')) {
-        my $template = $self->get_template({ file => 'configure.tt' });
-        ## Grab the values we already have for our settings, if any exist
-        $template->param(
-            framework_options => $framework_options,
-            normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
-            %{$self->get_config}
-        );
-        print $cgi->header();
-        print $template->output();
-    }
-    else {
+    if ($cgi->param('save')) {
         sub validate_option {
             my ($option, $valid_options, $label) = @_;
             if (!(any { $_ eq $option } @{$valid_options})) {
@@ -789,6 +778,17 @@ sub configure {
         # Save
         $self->store_data($config);
         $self->go_home();
+    }
+    else {
+        my $template = $self->get_template({ file => 'configure.tt' });
+        ## Grab the values we already have for our settings, if any exist
+        $template->param(
+            framework_options => $framework_options,
+            normalize_utf8_normalization_form_options => $normalize_utf8_normalization_form_options,
+            %{$self->get_config}
+        );
+        print $cgi->header(-charset => 'utf-8');
+        print $template->output();
     }
 }
 
