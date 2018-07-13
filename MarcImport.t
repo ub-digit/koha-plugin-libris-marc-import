@@ -11,7 +11,7 @@ use File::Spec;
 #use Test::MockModule;
 use Test::MockObject::Extends;
 use t::lib::Mocks;
-use Test::More tests => 54;
+use Test::More tests => 55;
 use Cwd qw(getcwd);
 
 use C4::Biblio;
@@ -28,7 +28,7 @@ use Koha::Database;
 use lib 'Koha/Plugin/Se/Ub/Gu'; # Perhaps not needed after all?? Koha loads include path?
 use Koha::Plugin::Se::Ub::Gu::MarcImport;
 
-my $plugin = Koha::Plugin::Se::Ub::Gu::MarcImport->new({});
+my $plugin = Koha::Plugin::Se::Ub::Gu::MarcImport->new({ no_cache => 1 });
 $plugin = Test::MockObject::Extends->new($plugin);
 
 my $conf = {
@@ -479,11 +479,27 @@ my $process_marc_command_record = $plugin->to_marc({
 
 ok(-f '/tmp/MarcImport_test', "Process MARC command has run");
 unlink '/tmp/MarcImport_test';
+
 ok($process_marc_command_record, "Record processed by shell command successfully processed by plugin");
 ok(encode('UTF-8', $record_a->as_usmarc()) eq $process_marc_command_record, 'Record produced by shell command `cat {marc_file}` is identical to original incoming record');
 
 # TODO: Should also check that record_a was removed, and not record_b!
 
+# Create duplicate record in database to trigger multiple matches error
+my ($duplicate_record_biblionumber) = AddBiblio($processed_record, $frameworkcode);
+
+# Sleep hack agian to wait for Elastic:
+sleep(1);
+
+# Enable matching again
+$conf->{record_matching_enable} = 1;
+
+my $result = $plugin->to_marc({
+    data => encode('UTF-8', $record->as_usmarc())
+});
+
+is($result, undef, "Plugin method 'to_marc' should return undef on error");
+
 # Need to clean up Zebra/Elastic explicitly since not part of transaction
-ModZebra($biblionumber, "recordDelete", "biblioserver");
+ModZebra($_, "recordDelete", "biblioserver") foreach ($biblionumber, $duplicate_record_biblionumber);
 $schema->storage->txn_rollback;

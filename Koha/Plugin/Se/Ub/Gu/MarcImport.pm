@@ -20,7 +20,12 @@ use Koha::Libraries;
 use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
 use Koha::BiblioFrameworks;
+use Koha::Caches;
+
 # use Koha::Logger;
+use Log::Log4perl;
+use Log::Log4perl::MDC;
+use Log::Dispatch::Email::MIMEMailSender;
 use Data::Dumper;
 use MARC::Record;
 use MARC::Batch;
@@ -50,6 +55,8 @@ our $metadata = {
     version         => $VERSION,
 };
 
+my $cache = Koha::Caches->get_instance();
+
 ## This is the minimum code required for a plugin's 'new' method
 ## More can be added, but none should be removed
 sub new {
@@ -64,7 +71,21 @@ sub new {
     ## and returns our actual $self
     my $self = $class->SUPER::new($args);
 
+    my $config = $self->get_config();
+
+    if ($config->{log4perl_config_file}) {
+        Log::Log4perl->init($config->{log4perl_config_file});
+    }
+
     return $self;
+}
+
+sub get_logger {
+    my ($self) = @_;
+    my $config = $self->get_config();
+    if ($config->{log4perl_config_file}) {
+        return Log::Log4perl->get_logger('Koha::Plugin::Se::Ub::Gu::MarcImport');
+    }
 }
 
 ## The existiance of a 'to_marc' subroutine means the plugin is capable
@@ -78,7 +99,7 @@ sub new {
 # 4. Apply deduplication logic
 # 5. Process items
 sub to_marc {
-    my ( $self, $args ) = @_;
+    my ($self, $args) = @_;
 
     my $debug = $args->{debug};
     #my $logger = Koha::Logger->get;
@@ -100,14 +121,12 @@ sub to_marc {
             my $command = $config->{process_marc_command_command};
             my $replacements = $command =~ s/\{marc_file\}/$marc_file/g;
             if (!$replacements) {
-                if ($config->{'stash_failed_records_enable'}) {
-                    $self->_stashFailedMarcRecord(
-                        $args->{data},
-                        "process_marc_command_missing_marc_file_token",
-                        "Missing marc file token, command must contain {marc_file} which will be replaced with input marc file path",
-                        $config->{'stash_failed_records_directory'}
-                    );
-                }
+                $self->_importError(
+                    $args->{data},
+                    undef,
+                    "process_marc_command_missing_marc_file_token",
+                    "Missing marc file token, command must contain {marc_file} which will be replaced with input marc file path"
+                );
                 return;
             }
 
@@ -118,14 +137,12 @@ sub to_marc {
             my $marc = `$command`;
 
             if ($?) {
-                if ($config->{'stash_failed_records_enable'}) {
-                    $self->_stashFailedMarcRecord(
-                        $args->{data},
-                        "process_marc_command_fail",
-                        "Command returned non zero exit status",
-                        $config->{'stash_failed_records_directory'}
-                    );
-                }
+                $self->_importError(
+                    $args->{data},
+                    undef,
+                    "process_marc_command_fail",
+                    "Command returned non zero exit status"
+                );
                 return;
             }
             $args->{data} = $marc;
@@ -147,7 +164,7 @@ sub to_marc {
 
 
     foreach my $key ('deduplicate_fields_tagspecs', 'deduplicate_records_tagspecs', 'matchpoints') {
-        $config->{$key} = [split(/[\r\n]+/, $config->{$key})];
+        $config->{$key} = [split(/[\r\n]+/, $config->{$key})] if defined $config->{$key};
     }
 
     #TODO: setting
@@ -187,14 +204,12 @@ sub to_marc {
                 my @records_raw = split("\x1D", $args->{data});
                 $record_data = $records_raw[$i];
             }
-            if ($config->{'stash_failed_records_enable'}) {
-                $self->_stashFailedMarcRecord(
-                    $record_data,
-                    "invalid_record",
-                    "Failed to parse MARC record: $@",
-                    $config->{'stash_failed_records_directory'}
-                );
-            }
+            $self->_importError(
+                $record_data,
+                $record,
+                "invalid_record",
+                "Failed to parse MARC record: $@"
+            );
             next;
         }
         elsif(!$record) {
@@ -299,14 +314,12 @@ sub to_marc {
                         my $error = "More than one match for $query";
                         warn $error;
 
-                        if ($config->{'stash_failed_records_enable'}) {
-                            $self->_stashFailedMarcRecord(
-                                $record->as_usmarc(),
-                                "multiple_matches",
-                                $error,
-                                $config->{'stash_failed_records_directory'}
-                            );
-                        }
+                        $self->_importError(
+                            $record->as_usmarc(),
+                            $record,
+                            "multiple_matches",
+                            $error
+                        );
                         next RECORD;
                     }
                     else {
@@ -399,7 +412,7 @@ sub to_marc {
         _pruneMarcRecords($field_specs, \@processed_marc_records);
     }
     close($fh); # This can probably be omitted, no point in closing file handle to in memory variable?
-    return encode('UTF-8', join("", map { $_->as_usmarc() } @processed_marc_records), 1);
+    return encode('UTF-8', join("", map { $_->as_usmarc() } @processed_marc_records), 1) || undef;
 }
 
 # Libris => Koha mapping
@@ -663,6 +676,27 @@ sub GetKohaItemsFromMarcRecord {
     return @koha_items;
 }
 
+sub _importError {
+    my ($self, $record_data, $record, $error_type, $error_msg, $directory) = @_;
+    my $config = $self->get_config();
+    if ($config->{'stash_failed_records_enable'}) {
+        $self->_stashFailedMarcRecord(
+            $record_data,
+            $error_type,
+            $error_msg,
+            $config->{'stash_failed_records_directory'}
+        );
+    }
+    my $logger = $self->get_logger();
+    if ($logger) {
+        #Log::Log4perl::MDC->put('to', )
+        Log::Log4perl::MDC->put('subject', "Koha marc import error: $error_type");
+        my $message = "$error_msg\n\n";
+        $message .= "Record:\n" . $record->as_formatted() if defined $record;
+        $logger->error($message);
+    }
+}
+
 sub _stashFailedMarcRecord {
     my ($self, $record_data, $error_type, $error_msg, $directory) = @_;
     if (length($directory)) {
@@ -700,6 +734,7 @@ sub get_config_defaults {
     my $default_normalize_utf8_normalization_form = 'C';
     return {
         'framework' => '',
+        'log4perl_config_file' => '',
         'process_incoming_record_items_enable' => '0',
         'incoming_record_items_tag' => '',
         'normalize_utf8_enable' => '0',
@@ -719,15 +754,26 @@ sub get_config_defaults {
     };
 }
 
+my $config_cache_key = 'Koha::Plugin::Se::Ub::Gu::MarcImport_config';
 sub get_config {
     my ($self) = @_;
-    #TODO: make package global, our?
-    my $defaults = $self->get_config_defaults();
-    my $config = {};
-    foreach my $key (keys %{$defaults}) {
-        $config->{$key} = $self->retrieve_data($key) // $defaults->{$key};
+
+    my $config = $cache->get_from_cache($config_cache_key, { unsafe => 1 }) unless $self->{no_cache};
+    if (!$config) {
+        my $defaults = $self->get_config_defaults();
+        $config = {};
+        foreach my $key (keys %{$defaults}) {
+            $config->{$key} = $self->retrieve_data($key) // $defaults->{$key};
+        }
+        $cache->set_in_cache($config_cache_key, $config) unless $self->{no_cache};
     }
     return $config;
+}
+
+sub store_data {
+    my ($self, $data) = @_;
+    $self->SUPER::store_data($data);
+    $cache->clear_from_cache($config_cache_key);
 }
 
 sub configure {

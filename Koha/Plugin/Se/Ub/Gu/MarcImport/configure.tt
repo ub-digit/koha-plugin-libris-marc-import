@@ -36,6 +36,10 @@
                 [% END %]
             </select>
         </li>
+        <li>
+            <label for="log4perl_config_file">Log4perl config file</label>
+            <input id="log4perl_config_file" type="text" name="log4perl_config_file" value="[% log4perl_config_file %]" />
+        </li>
         </ol>
         </fieldset>
         <fieldset class="rows">
@@ -179,16 +183,16 @@
         <legend>Run command</legend>
         <ol>
         <li>
-            <label for="process_marc_command_enable">Enable:</label>
-            [% IF process_marc_command_enable %]
-                <input id="process_marc_command_enable" type="checkbox" name="process_marc_command_enable" value="1" checked>
+            <label for="run_command_enable">Enable:</label>
+            [% IF run_command_enable %]
+                <input id="run_command_enable" type="checkbox" name="run_command_enable" value="1" checked>
             [% ELSE %]
-                <input id="process_marc_command_enable" type="checkbox" name="process_marc_command_enable" value="1">
+                <input id="run_command_enable" type="checkbox" name="run_command_enable" value="1">
             [% END %]
         </li>
         <li>
-            <label for="process_marc_command_command">Command:</label>
-            <textarea id="process_marc_command_command" name="process_marc_command_command" cols="100" rows="2" placeholder="{marc_file} placeholder will be replaced with path to MARC file, resulting MARC must be written to standard output.">[% process_marc_command_command %]</textarea>
+            <label for="run_command_command">Command:</label>
+            <textarea id="run_command_command" name="run_command_command" cols="100" rows="2" placeholder="{marc_file} placeholder will be replaced with path to MARC file, resulting MARC must be written to standard output.">[% run_command_command %]</textarea>
         </li>
         </ol>
         </fieldset>
