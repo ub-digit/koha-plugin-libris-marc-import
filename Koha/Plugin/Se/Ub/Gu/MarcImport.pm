@@ -25,7 +25,6 @@ use Koha::Caches;
 # use Koha::Logger;
 use Log::Log4perl;
 use Log::Log4perl::MDC;
-use Log::Dispatch::Email::MIMEMailSender;
 use Data::Dumper;
 use MARC::Record;
 use MARC::Batch;
@@ -70,14 +69,17 @@ sub new {
     ## This runs some additional magic and checking
     ## and returns our actual $self
     my $self = $class->SUPER::new($args);
+    $self->init_log4perl();
 
+    return $self;
+}
+
+sub init_log4perl {
+    my ($self) = @_;
     my $config = $self->get_config();
-
     if ($config->{log4perl_config_file}) {
         Log::Log4perl->init($config->{log4perl_config_file});
     }
-
-    return $self;
 }
 
 sub get_logger {
@@ -677,8 +679,10 @@ sub GetKohaItemsFromMarcRecord {
 }
 
 sub _importError {
-    my ($self, $record_data, $record, $error_type, $error_msg, $directory) = @_;
+    my ($self, $record_data_string, $record, $error_type, $error_msg, $directory) = @_;
     my $config = $self->get_config();
+    my $record_data = encode('UTF-8', $record_data_string);
+
     if ($config->{'stash_failed_records_enable'}) {
         $self->_stashFailedMarcRecord(
             $record_data,
@@ -689,8 +693,13 @@ sub _importError {
     }
     my $logger = $self->get_logger();
     if ($logger) {
-        #Log::Log4perl::MDC->put('to', )
+
+        my $user_email = C4::Context::userenv->{'emailaddress'};
+        Log::Log4perl::MDC->put('to', $user_email) if $user_email;
+
         Log::Log4perl::MDC->put('subject', "Koha marc import error: $error_type");
+        Log::Log4perl::MDC->put('attachment-data', $record_data);
+        Log::Log4perl::MDC->put('attachment-filename', 'records.mrc');
         my $message = "$error_msg\n\n";
         $message .= "Record:\n" . $record->as_formatted() if defined $record;
         $logger->error($message);
@@ -710,7 +719,6 @@ sub _stashFailedMarcRecord {
         if (@$err) {
             die("Unable to create $output_dir");
         }
-        $record_data = encode('UTF-8', $record_data);
         my $record_hash = md5_hex($record_data);
         my $date = strftime "%d-%m-%Y", localtime;
         my $fh;

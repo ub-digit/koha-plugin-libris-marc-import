@@ -24,9 +24,15 @@ use Koha::AuthorisedValue;
 use Koha::Plugins;
 use Koha::Database;
 
+use File::Spec::Functions; # catfile
+use File::Basename;
+
 #my $plugin_path = File::Spec->catfile(getcwd, 'Koha', 'Plugin', 'Se', 'Ub', 'Gu');
 use lib 'Koha/Plugin/Se/Ub/Gu'; # Perhaps not needed after all?? Koha loads include path?
 use Koha::Plugin::Se::Ub::Gu::MarcImport;
+
+C4::Context->_new_userenv('');
+C4::Context->set_userenv(0, 0, 0, 'test', 'test', 0, 'test', undef, 'test@example.com', undef, undef);
 
 my $plugin = Koha::Plugin::Se::Ub::Gu::MarcImport->new({ no_cache => 1 });
 $plugin = Test::MockObject::Extends->new($plugin);
@@ -494,6 +500,10 @@ sleep(1);
 # Enable matching again
 $conf->{record_matching_enable} = 1;
 
+$conf->{log4perl_config_file} = catfile(dirname(__FILE__), 'log4perl.t.conf');
+$plugin->init_log4perl();
+
+# TODO: Mock MimeMailSender and write tests for correct headers etc
 my $result = $plugin->to_marc({
     data => encode('UTF-8', $record->as_usmarc())
 });
