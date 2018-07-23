@@ -694,7 +694,7 @@ sub _importError {
     my $logger = $self->get_logger();
     if ($logger) {
 
-        my $user_email = C4::Context::userenv->{'emailaddress'};
+        my $user_email = defined C4::Context::userenv && C4::Context::userenv->{'emailaddress'};
         Log::Log4perl::MDC->put('to', $user_email) if $user_email;
 
         Log::Log4perl::MDC->put('subject', "Koha marc import error: $error_type");
