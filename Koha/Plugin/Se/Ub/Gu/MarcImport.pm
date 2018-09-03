@@ -194,7 +194,8 @@ sub to_marc {
         my $record;
         # Infinite loop and eval so can catch marc decode/parsing errors
         eval { $record = $marc_batch->next() };
-        if ($@) {
+        my $errors = $@ || join("\n", $marc_batch->warnings());
+        if ($errors) {
             # \x1D is end of record
             # TODO: Think record always undef if errors occured
             # so this check can probably be removed
@@ -210,7 +211,7 @@ sub to_marc {
                 $record_data,
                 $record,
                 "invalid_record",
-                "Failed to parse MARC record: $@"
+                "Failed to parse MARC record: $errors"
             );
             next;
         }
