@@ -111,6 +111,52 @@ sub to_marc {
     my $marc_type = C4::Context->preference('marcflavour');
     my $config = $self->get_config();
 
+    # Decode all records and catch possible decoding errors
+    my $marc_batch;
+    my $fh;
+    # Remove block?
+    {
+        open($fh, "<", \$args->{data});
+        binmode $fh, ':raw';
+        $marc_batch = MARC::Batch->new('USMARC', $fh);
+    }
+
+    my @records;
+    my $i = -1;
+    while(1) {
+        $i++;
+        my $record;
+        # Infinite loop and eval so can catch marc decode/parsing errors
+        eval { $record = $marc_batch->next() };
+        my $errors = $@ || join("\n", $marc_batch->warnings());
+        if ($errors) {
+            # \x1D is end of record
+            # TODO: Think record always undef if errors occured
+            # so this check can probably be removed
+            my $record_data = undef;
+            if (defined $record) {
+                $record_data = $record->as_usmarc;
+            }
+            else {
+                my @records_raw = split("\x1D", $args->{data});
+                $record_data = $records_raw[$i];
+            }
+            $self->_importError(
+                $record_data,
+                $record,
+                "invalid_record",
+                "Failed to parse MARC record: $errors"
+            );
+            next;
+        }
+        elsif(!$record) {
+            last;
+        }
+        push @records, $record;
+    }
+    $args->{data} = encode('UTF-8', join("", map { $_->as_usmarc() } @records), 1) || undef;
+    return undef unless $args->{data};
+
     if ($config->{run_marc_command_enable} && $config->{run_marc_command_command}) {
         {
             my $uuid;
@@ -151,12 +197,15 @@ sub to_marc {
         }
     }
 
-    my $marc_batch;
-    my $fh;
+    # Remove block?
     {
         open($fh, "<", \$args->{data});
         binmode $fh, ':raw';
         $marc_batch = MARC::Batch->new('USMARC', $fh);
+    }
+    @records = ();
+    while(my $record = $marc_batch->next()) {
+        push @records, $record;
     }
 
     my @processed_marc_records;
@@ -186,40 +235,6 @@ sub to_marc {
     my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $config->{framework});
     my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $config->{framework});
 
-    # Decode all records and catch possible decoding errors
-    my @records;
-    my $i = -1;
-    while(1) {
-        $i++;
-        my $record;
-        # Infinite loop and eval so can catch marc decode/parsing errors
-        eval { $record = $marc_batch->next() };
-        my $errors = $@ || join("\n", $marc_batch->warnings());
-        if ($errors) {
-            # \x1D is end of record
-            # TODO: Think record always undef if errors occured
-            # so this check can probably be removed
-            my $record_data = undef;
-            if (defined $record) {
-                $record_data = $record->as_usmarc;
-            }
-            else {
-                my @records_raw = split("\x1D", $args->{data});
-                $record_data = $records_raw[$i];
-            }
-            $self->_importError(
-                $record_data,
-                $record,
-                "invalid_record",
-                "Failed to parse MARC record: $errors"
-            );
-            next;
-        }
-        elsif(!$record) {
-            last;
-        }
-        push @records, $record;
-    }
 
     if ($config->{deduplicate_records_enable} && $config->{deduplicate_records_tagspecs}) {
         my $hashed_fields_key;
@@ -254,7 +269,7 @@ sub to_marc {
                 push @deduplicated_records_keys, $hashed_fields_key;
             }
             else {
-                push @missing_fields_records, $record
+                push @missing_fields_records, $record;
             }
         }
         @records = map { $deduplicated_records{$_} } @deduplicated_records_keys;
