@@ -476,18 +476,18 @@ $conf->{deduplicate_records_enable} = 0;
 $conf->{move_incoming_control_number_enable} = 0;
 $conf->{record_matching_enable} = 0;
 $conf->{protect_authority_linkage_enable} = 0;
-$conf->{process_marc_command_enable} = 1;
-$conf->{process_marc_command_command} = 'touch /tmp/MarcImport_test && cat "{marc_file}" && rm "{marc_file}"';
+$conf->{run_marc_command_enable} = 1;
+$conf->{run_marc_command_command} = 'touch /tmp/MarcImport_test && cat "{marc_file}" && rm "{marc_file}"';
 
-my $process_marc_command_record = $plugin->to_marc({
+my $run_marc_command_record = $plugin->to_marc({
     data => encode('UTF-8', $record_a->as_usmarc())
 });
 
 ok(-f '/tmp/MarcImport_test', "Process MARC command has run");
 unlink '/tmp/MarcImport_test';
 
-ok($process_marc_command_record, "Record processed by shell command successfully processed by plugin");
-ok(encode('UTF-8', $record_a->as_usmarc()) eq $process_marc_command_record, 'Record produced by shell command `cat {marc_file}` is identical to original incoming record');
+ok($run_marc_command_record, "Record processed by shell command successfully processed by plugin");
+ok(encode('UTF-8', $record_a->as_usmarc()) eq $run_marc_command_record, 'Record produced by shell command `cat {marc_file}` is identical to original incoming record');
 
 # TODO: Should also check that record_a was removed, and not record_b!
 

@@ -183,16 +183,16 @@
         <legend>Run command</legend>
         <ol>
         <li>
-            <label for="run_command_enable">Enable:</label>
-            [% IF run_command_enable %]
-                <input id="run_command_enable" type="checkbox" name="run_command_enable" value="1" checked>
+            <label for="run_marc_command_enable">Enable:</label>
+            [% IF run_marc_command_enable %]
+                <input id="run_marc_command_enable" type="checkbox" name="run_marc_command_enable" value="1" checked>
             [% ELSE %]
-                <input id="run_command_enable" type="checkbox" name="run_command_enable" value="1">
+                <input id="run_marc_command_enable" type="checkbox" name="run_marc_command_enable" value="1">
             [% END %]
         </li>
         <li>
-            <label for="run_command_command">Command:</label>
-            <textarea id="run_command_command" name="run_command_command" cols="100" rows="2" placeholder="{marc_file} placeholder will be replaced with path to MARC file, resulting MARC must be written to standard output.">[% run_command_command %]</textarea>
+            <label for="run_marc_command_command">Command:</label>
+            <textarea id="run_marc_command_command" name="run_marc_command_command" cols="100" rows="2" placeholder="{marc_file} placeholder will be replaced with path to MARC file, resulting MARC must be written to standard output.">[% run_marc_command_command %]</textarea>
         </li>
         </ol>
         </fieldset>

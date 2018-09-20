@@ -111,7 +111,7 @@ sub to_marc {
     my $marc_type = C4::Context->preference('marcflavour');
     my $config = $self->get_config();
 
-    if ($config->{process_marc_command_enable} && $config->{process_marc_command_command}) {
+    if ($config->{run_marc_command_enable} && $config->{run_marc_command_command}) {
         {
             my $uuid;
             my $uuid_string;
@@ -119,14 +119,14 @@ sub to_marc {
             UUID::unparse($uuid, $uuid_string);
 
             # TODO: Base dir as config option?
-            my $marc_file = '/tmp/MarcImport_process_marc_command_marc_file-' . $uuid_string;
-            my $command = $config->{process_marc_command_command};
+            my $marc_file = '/tmp/MarcImport_run_marc_command_marc_file-' . $uuid_string;
+            my $command = $config->{run_marc_command_command};
             my $replacements = $command =~ s/\{marc_file\}/$marc_file/g;
             if (!$replacements) {
                 $self->_importError(
                     $args->{data},
                     undef,
-                    "process_marc_command_missing_marc_file_token",
+                    "run_marc_command_missing_marc_file_token",
                     "Missing marc file token, command must contain {marc_file} which will be replaced with input marc file path"
                 );
                 return;
@@ -142,7 +142,7 @@ sub to_marc {
                 $self->_importError(
                     $args->{data},
                     undef,
-                    "process_marc_command_fail",
+                    "run_marc_command_fail",
                     "Command returned non zero exit status"
                 );
                 return;
@@ -758,8 +758,8 @@ sub get_config_defaults {
         'stash_failed_records_enable' => '0',
         'stash_failed_records_directory' => '',
         'protect_authority_linkage_enable' => '0',
-        'process_marc_command_enable' => '0',
-        'process_marc_command_command' => '',
+        'run_marc_command_enable' => '0',
+        'run_marc_command_command' => '',
     };
 }
 
@@ -827,7 +827,7 @@ sub configure {
         validate_option($config->{deduplicate_records_enable}, $checkbox_options, 'Enable deduplicate records');
         validate_option($config->{stash_failed_records_enable}, $checkbox_options, 'Stash field records');
         validate_option($config->{protect_authority_linkage_enable}, $checkbox_options, 'Protect autority linkage');
-        validate_option($config->{process_marc_command_enable}, $checkbox_options, 'Process marc command');
+        validate_option($config->{run_marc_command_enable}, $checkbox_options, 'Process marc command');
         # TODO: why not validate here instead using @valid_utf8_normalization_forms?
 
         # Save
