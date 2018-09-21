@@ -2,6 +2,7 @@ package Koha::Plugin::Se::Ub::Gu::MarcImport;
 
 use Modern::Perl;
 use Encode qw(encode);
+use IPC::Open3;
 ## Required for all plugins
 use base qw(Koha::Plugins::Base);
 
@@ -165,8 +166,11 @@ sub to_marc {
             UUID::unparse($uuid, $uuid_string);
 
             # TODO: Base dir as config option?
-            my $marc_file = '/tmp/MarcImport_run_marc_command_marc_file-' . $uuid_string;
+            my $marc_filename = "MarcImport_run_marc_command_marc_file-$uuid_string";
+            my $marc_file = "/tmp/$marc_filename";
             my $command = $config->{run_marc_command_command};
+
+            $command =~ s/\{marc_filename\}/$marc_filename/g;
             my $replacements = $command =~ s/\{marc_file\}/$marc_file/g;
             if (!$replacements) {
                 $self->_importError(
@@ -182,14 +186,17 @@ sub to_marc {
             print FILE $args->{data};
             close(FILE);
 
-            my $marc = `$command`;
-
+            local $/ = undef;
+            my $pid = open3(\*WRITER, \*READER, \*ERROR, $command);
+            my $marc = <READER>;
+            my $error = <ERROR>;
+            waitpid($pid, 0) or die("$!\n");
             if ($?) {
                 $self->_importError(
                     $args->{data},
                     undef,
                     "run_marc_command_fail",
-                    "Command returned non zero exit status"
+                    "Command returned non zero exit status: $error"
                 );
                 return;
             }
