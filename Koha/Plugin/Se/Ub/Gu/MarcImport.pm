@@ -545,11 +545,9 @@ sub _processIncomingRecordItems {
         print "\n*** Incoming item ***\n ${\$incoming_item_field->as_formatted()} \n\n" if $debug;
 
         # First globally check for possibly existing barcodes
-        if (
-            $incoming_item_field->subfield(LIBRIS_ITEM_BARCODE) &&
-            GetItemnumberFromBarcode($incoming_item_field->subfield(LIBRIS_ITEM_BARCODE))
-        ) {
-            print "Found existing barcode (${\$incoming_item_field->subfield(LIBRIS_ITEM_BARCODE)}), skipping\n" if $debug;
+        my $barcode = $incoming_item_field->subfield(LIBRIS_ITEM_BARCODE);
+        if ($barcode && Koha::Items->find({ barcode => $barcode })) {
+            print "Found existing barcode ($barcode}), skipping\n" if $debug;
             # There exists an item with same barcode as incoming item, skip
             next INCOMING_ITEM_FIELD;
         }
