@@ -615,8 +615,8 @@ sub _processIncomingRecordItems {
             # Lazy load existing koha items
             if (!(defined $existing_koha_items) && $matched_record_id) {
                 $existing_koha_items = [];
-                my $existing_koha_itemnumbers = GetItemnumbersForBiblio($matched_record_id);
-                foreach my $itemnumber (@{$existing_koha_itemnumbers}) {
+                my @existing_koha_itemnumbers = Koha::Items->search({ biblionumber => $matched_record_id })->get_column("itemnumber");
+                foreach my $itemnumber (@existing_koha_itemnumbers) {
                     push @{$existing_koha_items}, GetItem($itemnumber);
                 }
             }
