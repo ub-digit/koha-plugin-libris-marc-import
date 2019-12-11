@@ -22,6 +22,7 @@ use Koha::SearchEngine;
 use Koha::SearchEngine::Search;
 use Koha::BiblioFrameworks;
 use Koha::Caches;
+use Koha::Items;
 
 # use Koha::Logger;
 use Log::Log4perl;
@@ -617,7 +618,7 @@ sub _processIncomingRecordItems {
                 $existing_koha_items = [];
                 my @existing_koha_itemnumbers = Koha::Items->search({ biblionumber => $matched_record_id })->get_column("itemnumber");
                 foreach my $itemnumber (@existing_koha_itemnumbers) {
-                    push @{$existing_koha_items}, GetItem($itemnumber);
+                    push @{$existing_koha_items}, Koha::Items->find($itemnumber);
                 }
             }
             my $incoming_koha_item_field = MARC::Field->new($koha_items_tag, '', '', %koha_subfield_values);
