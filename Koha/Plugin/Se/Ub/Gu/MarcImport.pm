@@ -221,9 +221,10 @@ sub to_marc {
     my @valid_utf8_normalization_forms = ('D', 'C', 'KD', 'KC');
     #my %valid_item_types = %{ ItemTypes() };
 
-
+    # Hack, since $config is cached unsafely cannot modify values in place
+    my $_config = {};
     foreach my $key ('deduplicate_fields_tagspecs', 'deduplicate_records_tagspecs', 'matchpoints') {
-        $config->{$key} = [split(/[\r\n]+/, $config->{$key})] if defined $config->{$key};
+        $_config->{$key} = [split(/[\r\n]+/, $config->{$key})] if defined $config->{$key};
     }
 
     #TODO: setting
@@ -244,7 +245,7 @@ sub to_marc {
     my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $config->{framework});
 
 
-    if ($config->{deduplicate_records_enable} && $config->{deduplicate_records_tagspecs}) {
+    if ($config->{deduplicate_records_enable} && $_config->{deduplicate_records_tagspecs}) {
         my $hashed_fields_key;
         my %deduplicated_records;
         my @deduplicated_records_keys; # To preserve order
@@ -252,7 +253,7 @@ sub to_marc {
         my %hash_fields;
         my @keys;
 
-        foreach my $field_spec (@{$config->{deduplicate_records_tagspecs}}) {
+        foreach my $field_spec (@{$_config->{deduplicate_records_tagspecs}}) {
             my ($tag, $subfields) = $field_spec =~ /([0-9]{3})([a-zA-Z0-9]*)/;
             $hash_fields{$tag} = $subfields ? { map { $_ => undef } split(//, $subfields) } : undef;
         }
@@ -316,7 +317,7 @@ sub to_marc {
 
         ## Perform search engine based record matching
         if (!$matched_record_id && $config->{record_matching_enable}) {
-            SEQUENTIAL_MATCH: foreach my $matchpoint (@{$config->{matchpoints}}) {
+            SEQUENTIAL_MATCH: foreach my $matchpoint (@{$_config->{matchpoints}}) {
                 my $query = build_simplequery($matchpoint, $record, 'OR');
                 if ($query) {
                     my ($error, $results, $totalhits) = $searcher->simple_search_compat($query, 0, 3, [$server]);
@@ -390,7 +391,7 @@ sub to_marc {
             ## Dedup incoming record field
             if ($config->{deduplicate_fields_enable}) {
                 # TODO: $field_spec/$tagspecs, pick one!
-                foreach my $field_spec (@{$config->{deduplicate_fields_tagspecs}}) {
+                foreach my $field_spec (@{$_config->{deduplicate_fields_tagspecs}}) {
                     my ($tag_spec, $subfields) = $field_spec =~ /([0-9.]{3})([a-zA-Z0-9]*)/;
                     if (!$tag_spec) {
                         die "Empty or invalid tag-spec: \"$tag_spec\"";
