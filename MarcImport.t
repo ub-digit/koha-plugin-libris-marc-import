@@ -66,10 +66,11 @@ my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.
 my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $frameworkcode);
 
 my $plugin_process_records = sub {
-    my ($records, $test_message) = @_;
+    my ($records, $test_message, $debug) = @_;
     $records = [$records] if (ref($records) ne 'ARRAY');
     my $processed_records_marc = $plugin->to_marc({
-        data => join('', map { encode('UTF-8', $_->as_usmarc()) } @{$records} )
+        data => join('', map { encode('UTF-8', $_->as_usmarc()) } @{$records} ),
+        debug => $debug
     });
     ok($processed_records_marc, $test_message);
     # TODO: Quick and dirty, since MARCH::Batch interface is frustrating to work with
@@ -355,16 +356,17 @@ is(
 );
 
 # Append two more unique records just to make sure that multiple items are processed correctly
-    MARC::Field->new(
-        $libris_item_tag, ' ', ' ',
-        LIBRIS_ITEM_COPYNUMBER, '1',
-        LIBRIS_ITEM_TYPE, 'test',
-        LIBRIS_ITEM_BARCODE , '123',
-        LIBRIS_ITEM_CALLNUMBER, 'test callnumber',
-        LIBRIS_ITEM_NOT_FOR_LOAN, '0',
-        LIBRIS_ITEM_LOCATION, "000$location",
-        LIBRIS_ITEM_NOTE, '', # Perhaps omit this since should not be set at all
-    ),
+# Existing item:
+# MARC::Field->new(
+#   $libris_item_tag, ' ', ' ',
+#   LIBRIS_ITEM_COPYNUMBER, '1',
+#   LIBRIS_ITEM_TYPE, 'test',
+#   LIBRIS_ITEM_BARCODE , '123',
+#   LIBRIS_ITEM_CALLNUMBER, 'test callnumber',
+#   LIBRIS_ITEM_NOT_FOR_LOAN, '0',
+#   LIBRIS_ITEM_LOCATION, "000$location",
+#   LIBRIS_ITEM_NOTE, '', # Perhaps omit this since should not be set at all
+#);
 
 my $incoming_record_with_duplicate_items = $incoming_record_with_item->clone();
 @fields = (

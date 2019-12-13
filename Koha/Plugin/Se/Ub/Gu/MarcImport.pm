@@ -619,14 +619,14 @@ sub _processIncomingRecordItems {
                 $existing_koha_items = [];
                 my @existing_koha_itemnumbers = Koha::Items->search({ biblionumber => $matched_record_id })->get_column("itemnumber");
                 foreach my $itemnumber (@existing_koha_itemnumbers) {
-                    push @{$existing_koha_items}, Koha::Items->find($itemnumber);
+                    push @{$existing_koha_items}, scalar(Koha::Items->find($itemnumber));
                 }
             }
             my $incoming_koha_item_field = MARC::Field->new($koha_items_tag, '', '', %koha_subfield_values);
             # Construct Koha item from incoming item values
             my $incoming_koha_item = GetKohaItemsFromMarcField($incoming_koha_item_field, $marc_framework);
             # If identical shelving locations the two items are considered equal, skip
-            if (any { $incoming_koha_item->{'location'} eq $_->{'location'} } @{$existing_koha_items}) {
+            if (any { $incoming_koha_item->{'location'} eq $_->location } @{$existing_koha_items}) {
                 print "Location \"${\$incoming_koha_item->{'location'}}\" matches existing item, skipping\n" if $debug;
                 next INCOMING_ITEM_FIELD;
             }
