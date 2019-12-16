@@ -549,7 +549,7 @@ sub _processIncomingRecordItems {
         # First globally check for possibly existing barcodes
         my $barcode = $incoming_item_field->subfield(LIBRIS_ITEM_BARCODE);
         if ($barcode && Koha::Items->find({ barcode => $barcode })) {
-            print "Found existing barcode ($barcode}), skipping\n" if $debug;
+            print "Found existing barcode ($barcode), skipping\n" if $debug;
             # There exists an item with same barcode as incoming item, skip
             next INCOMING_ITEM_FIELD;
         }
@@ -789,7 +789,9 @@ my $config_cache_key = 'Koha::Plugin::Se::Ub::Gu::MarcImport_config';
 sub get_config {
     my ($self) = @_;
 
-    my $config = $cache->get_from_cache($config_cache_key, { unsafe => 1 }) unless $self->{no_cache};
+    my $config;
+    $config = $cache->get_from_cache($config_cache_key, { unsafe => 1 }) unless $self->{no_cache};
+
     if (!$config) {
         my $defaults = $self->get_config_defaults();
         $config = {};
@@ -1027,6 +1029,7 @@ sub build_simplequery {
         # @TODO: or use exceptions?
         die("Invalid matchpoint format, invalid marc-field: $matchpoint\n");
     }
+
     my $QParser = C4::Context->queryparser if (C4::Context->preference('UseQueryParser'));
     my $using_elastic_search = (C4::Context->preference('SearchEngine') eq 'Elasticsearch');
     my $op;

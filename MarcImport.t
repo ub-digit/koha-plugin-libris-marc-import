@@ -8,9 +8,8 @@ use MARC::File::USMARC;
 use Encode qw(encode);
 use File::Spec;
 
-#use Test::MockModule;
-use Test::MockObject::Extends;
-use t::lib::Mocks;
+use Test::MockModule;
+use t::lib::Mocks; # Remove?
 use Test::More tests => 55;
 use Cwd qw(getcwd);
 
@@ -27,15 +26,10 @@ use Koha::Database;
 use File::Spec::Functions; # catfile
 use File::Basename;
 
-#my $plugin_path = File::Spec->catfile(getcwd, 'Koha', 'Plugin', 'Se', 'Ub', 'Gu');
-use lib 'Koha/Plugin/Se/Ub/Gu'; # Perhaps not needed after all?? Koha loads include path?
-use Koha::Plugin::Se::Ub::Gu::MarcImport;
-
 C4::Context->_new_userenv('');
 C4::Context->set_userenv(0, 0, 0, 'test', 'test', 0, 'test', undef, 'test@example.com', undef, undef);
 
-my $plugin = Koha::Plugin::Se::Ub::Gu::MarcImport->new({ no_cache => 1 });
-$plugin = Test::MockObject::Extends->new($plugin);
+my $marcImportModule = Test::MockModule->new('Koha::Plugin::Se::Ub::Gu::MarcImport');
 
 my $conf = {
     framework => '',
@@ -51,13 +45,16 @@ my $conf = {
     record_matching_enable => 1,
     matchpoints => 'system-control-number,035a',
     protect_authority_linkage_enable => 1,
+    stash_failed_records_enable => 0,
 };
 
-$plugin->mock('retrieve_data', sub {
+$marcImportModule->mock(
+    retrieve_data => sub {
         my ($self, $key) = @_;
         return $conf->{$key};
     }
 );
+my $plugin = Koha::Plugin::Se::Ub::Gu::MarcImport->new({ no_cache => 1 });
 
 my $frameworkcode = ''; # TODO: Get this from pref?
 my ($item_tag, $item_subfield) = C4::Biblio::GetMarcFromKohaField('items.itemnumber', $frameworkcode);
@@ -83,21 +80,20 @@ $schema->storage->txn_begin;
 # Add item type
 my $itemtype_code = 'test';
 my $itemtype = Koha::ItemType->new({
-		itemtype => $itemtype_code,
-		description => $itemtype_code,
-		rentalcharge => 0.0,
-		defaultreplacecost => undef,
-		processfee => undef,
-		notforloan => 0,
-		imageurl => '',
-		summary => '',
-		checkinmsg => '',
-		checkinmsgtype => 'message',
-		sip_media_type => '',
-		hideinopac => 0,
-		searchcategory => '',
-	}
-);
+    itemtype => $itemtype_code,
+    description => $itemtype_code,
+    rentalcharge => 0.0,
+    defaultreplacecost => undef,
+    processfee => undef,
+    notforloan => 0,
+    imageurl => '',
+    summary => '',
+    checkinmsg => '',
+    checkinmsgtype => 'message',
+    sip_media_type => '',
+    hideinopac => 0,
+    searchcategory => '',
+});
 
 # TODO: Test for branch verification inside libris plugin??
 # Add branch
@@ -115,13 +111,13 @@ is($@, '', "Test library was successfully saved");
 
 my $location = "${library_branchcode}3456";
 my $location_authorized_value = Koha::AuthorisedValue->new({
-		category => 'LOC',
-		authorised_value => $location,
+        category => 'LOC',
+        authorised_value => $location,
         #description => 'Test location', #TODO: Find out column name
-		lib => $library_branchcode,
-		lib_opac => undef,
-		imageurl => '',
-	}
+        lib => $library_branchcode,
+        lib_opac => undef,
+        imageurl => '',
+    }
 );
 eval { $location_authorized_value->store; };
 is($@, '', "Test location was successfully saved");
@@ -481,6 +477,13 @@ $conf->{protect_authority_linkage_enable} = 0;
 $conf->{run_marc_command_enable} = 1;
 $conf->{run_marc_command_command} = 'touch /tmp/MarcImport_test && cat "{marc_file}" && rm "{marc_file}"';
 
+# Delete field to prevent match
+# (which will cause test for equivalence to since
+# Koha adds 999 and modifies leader)
+# TODO: Can probably remove this since record matching is disabled
+my @fields_035 = $record_a->field('035');
+$record_a->delete_fields(@fields_035);
+
 my $run_marc_command_record = $plugin->to_marc({
     data => encode('UTF-8', $record_a->as_usmarc())
 });
@@ -489,6 +492,7 @@ ok(-f '/tmp/MarcImport_test', "Process MARC command has run");
 unlink '/tmp/MarcImport_test';
 
 ok($run_marc_command_record, "Record processed by shell command successfully processed by plugin");
+#my $command_record_a = MARC::Record->new_from_usmarc($run_marc_command_record);
 ok(encode('UTF-8', $record_a->as_usmarc()) eq $run_marc_command_record, 'Record produced by shell command `cat {marc_file}` is identical to original incoming record');
 
 # TODO: Should also check that record_a was removed, and not record_b!
@@ -496,7 +500,7 @@ ok(encode('UTF-8', $record_a->as_usmarc()) eq $run_marc_command_record, 'Record 
 # Create duplicate record in database to trigger multiple matches error
 my ($duplicate_record_biblionumber) = AddBiblio($processed_record, $frameworkcode);
 
-# Sleep hack agian to wait for Elastic:
+# Sleep hack again to wait for Elastic:
 sleep(1);
 
 # Enable matching again
