@@ -293,7 +293,7 @@ sub to_marc {
     RECORD: foreach my $record (@records) {
         my $matched_record_id = undef; # Can remove = undef?
         my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
-        if (defined($koha_local_record_id) && GetBiblio($koha_local_record_id)) {
+        if (defined($koha_local_record_id) && Koha::Biblios->find($koha_local_record_id)) {
             # Probably from other koha instance, or some other issue
             # Koha::Exceptions::Object::Exception->throw("Koha local id set by no matching record found");
             # What to do?
