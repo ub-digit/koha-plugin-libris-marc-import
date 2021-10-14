@@ -10,7 +10,7 @@ use base qw(Koha::Plugins::Base);
 
 ## We will also need to include any Koha libraries we want to access
 use C4::Context;
-use C4::Biblio;
+use C4::Biblio qw(GetMarcFromKohaField);
 use C4::Items;
 use C4::Search;
 use C4::Charset qw(SetUTF8Flag);
