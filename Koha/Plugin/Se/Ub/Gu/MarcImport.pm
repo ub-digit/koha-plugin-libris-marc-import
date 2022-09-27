@@ -10,7 +10,7 @@ use base qw(Koha::Plugins::Base);
 
 ## We will also need to include any Koha libraries we want to access
 use C4::Context;
-use C4::Biblio qw(GetMarcFromKohaField GetMarcBiblio TransformMarcToKoha);
+use C4::Biblio qw(GetMarcFromKohaField TransformMarcToKoha);
 use C4::Items;
 use C4::Search;
 use C4::Charset qw(SetUTF8Flag);
@@ -520,7 +520,8 @@ sub _processIncomingRecordItems {
     return unless @incoming_item_fields;
 
     if ($matched_record_id) {
-        my $matched_record = GetMarcBiblio({biblionumber => $matched_record_id});
+        my $biblio = Koha::Biblios->find($matched_record_id);
+        my $matched_record = $biblio->metadata->record();
         @existing_libris_item_fields = $matched_record->field($incoming_record_items_tag);
     }
 
