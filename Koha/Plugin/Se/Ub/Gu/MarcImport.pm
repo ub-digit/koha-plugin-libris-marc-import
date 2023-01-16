@@ -156,6 +156,7 @@ sub to_marc {
         }
         push @records, $record;
     }
+    my @original_records = @records;
     $args->{data} = encode('UTF-8', join("", map { $_->as_usmarc() } @records), 1) || undef;
     return undef unless $args->{data};
 
@@ -242,8 +243,16 @@ sub to_marc {
 
     # Canonical way of getting internal koha tagspec?
     my ($koha_local_id_tag, $koha_local_id_subfield) = GetMarcFromKohaField('biblio.biblionumber', $config->{framework});
-    my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $config->{framework});
 
+    my $get_local_record_id = sub {
+        my ($record) = @_;
+        my $id;
+        foreach my $field ($record->field($koha_local_id_tag)) {
+            $id = $field->subfield($koha_local_id_subfield);
+            return $id if $id;
+        }
+    };
+    my ($koha_items_tag) = GetMarcFromKohaField('items.itemnumber', $config->{framework});
 
     if ($config->{deduplicate_records_enable} && $_config->{deduplicate_records_tagspecs}) {
         my $hashed_fields_key;
@@ -292,7 +301,7 @@ sub to_marc {
 
     RECORD: foreach my $record (@records) {
         my $matched_record_id = undef; # Can remove = undef?
-        my $koha_local_record_id = $record->subfield($koha_local_id_tag, $koha_local_id_subfield);
+        my $koha_local_record_id = $get_local_record_id->($record);
         if (defined($koha_local_record_id) && Koha::Biblios->find($koha_local_record_id)) {
             # Probably from other koha instance, or some other issue
             # Koha::Exceptions::Object::Exception->throw("Koha local id set by no matching record found");
@@ -329,24 +338,40 @@ sub to_marc {
                     $results //= [];
 
                     if (@{$results} == 1) {
-                        foreach my $result (@{$results}) {
-                            my $_record = C4::Search::new_record_from_zebra($server, $result);
-                            SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
-                            $matched_record_id = $_record->subfield($koha_local_id_tag, $koha_local_id_subfield);
-                        }
+                        my $_record = C4::Search::new_record_from_zebra($server, $results->[0]);
+                        SetUTF8Flag($_record); # From bulkmarcimport, can remove this? Probably
+                        $matched_record_id = $get_local_record_id->($_record);
                         last SEQUENTIAL_MATCH;
                     }
                     elsif (@{$results} > 1) {
                         # @TODO: Should perhaps add both records in 999c instead and let downstream take care of duplicates
                         my $error = "More than one match for $query";
                         warn $error;
-
-                        $self->_importError(
-                            $record->as_usmarc(),
-                            $record,
-                            "multiple_matches",
-                            $error
-                        );
+                        my $original_record;
+                        foreach $original_record (@original_records) {
+                            if(
+                                $original_record->field('001') eq $record->field('001') &&
+                                $original_record->field('003') eq $record->field('003')
+                            ) {
+                                last;
+                            }
+                        }
+                        if ($original_record) {
+                            $self->_importError(
+                                $original_record->as_usmarc(),
+                                $original_record,
+                                "multiple_matches",
+                                $error
+                            );
+                        }
+                        else {
+                            $self->_importError(
+                                $record->as_usmarc(),
+                                $record,
+                                "multiple_matches",
+                                "$error, unable to retrieve original record"
+                            );
+                        }
                         next RECORD;
                     }
                     else {
@@ -362,7 +387,7 @@ sub to_marc {
             if ($matched_record_id) {
                 my $error = DelBiblio($matched_record_id);
                 if ($error) {
-                    die("ERROR: Delete biblio $matched_record_id failed: $error\n");
+                    warn "ERROR: Delete biblio $matched_record_id failed: $error\n";
                 }
             }
             else {
