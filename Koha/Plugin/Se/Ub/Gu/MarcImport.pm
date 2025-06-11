@@ -1046,7 +1046,7 @@ sub build_simplequery {
         my ($tag, $subfields) = ($1, $2);
         foreach my $field ($record->field($tag)) {
             my $record_data = $field->as_string($subfields);
-            if ($record_data) {
+            if ($record_data && $record_data !~ /^\s*\([^\)]+\)\s*$/) {
                 push (@search_strings, "$index_field:\"$record_data\"");
             }
         }
